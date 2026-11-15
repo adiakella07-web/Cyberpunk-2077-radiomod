@@ -25,8 +25,26 @@ def _fix_stdio():
         sys.stdout = sys.stderr = f
 
 
+GUI = {"want": threading.Event(), "ready": threading.Event()}
+
+
+def run_gui():
+    """Embedded browser loop (needed for the standalone Apple Music mode). Must run on the main thread."""
+    try:
+        import webview
+    except Exception as e:
+        log(f"built-in browser unavailable: {e}")
+        return
+    os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--autoplay-policy=no-user-gesture-required")
+    webview.create_window("Neon Dial host", html="<html></html>", hidden=True)   # keeps the loop alive
+    webview.start(lambda: GUI["ready"].set(), private_mode=False, storage_path=str(config_mod.DATA_DIR / "webview"))
+
+
 def make_provider(cfg, engine):
     name = cfg["provider"]
+    if name == "apple-standalone":
+        from .providers.applemusic import AppleWebProvider
+        return AppleWebProvider(cfg, engine, GUI)
     if name == "demo":
         from .providers.demo import DemoProvider
         return DemoProvider(cfg, engine)
@@ -161,6 +179,24 @@ def selftest(path):
     except Exception:
         ok = False
         log_(traceback.format_exc())
+    try:
+        import tempfile
+        import webview
+        res = {}
+
+        def work():
+            try:
+                res["r"] = win.evaluate_js("(function(){return JSON.stringify(MusicKit.getInstance().isPlaying)})()")
+            except Exception as e:
+                res["err"] = repr(e)
+            finally:
+                win.destroy()
+        threading.Timer(60, lambda: os._exit(1)).start()
+        win = webview.create_window("t", html="<script>window.MusicKit={getInstance:function(){return {isPlaying:false}}}</script>", hidden=True)
+        webview.start(work, private_mode=False, storage_path=tempfile.mkdtemp())
+        log_(f"built-in browser (WebView2) check: {'OK ' + str(res.get('r')) if 'r' in res else 'FAILED ' + str(res.get('err'))}")
+    except Exception as e:
+        log_(f"built-in browser (WebView2) check: FAILED {e!r}")
     pathlib.Path(path).write_text("\n".join(lines) + ("\nSELFTEST OK" if ok else "\nSELFTEST FAILED"), encoding="utf-8")
     os._exit(0 if ok else 1)
 
@@ -184,7 +220,15 @@ def cli():
     engine = AudioEngine()
     provider = make_provider(cfg, engine)
     ready = threading.Event()
-    asyncio.run(serve(cfg, engine, provider, threading.Event(), args.watch_game, args.watch_pid))
+    t = threading.Thread(
+        target=lambda: asyncio.run(serve(cfg, engine, provider, threading.Event(), args.watch_game, args.watch_pid)),
+        daemon=True)
+    t.start()
+    while t.is_alive():
+        if GUI["want"].wait(0.5):
+            run_gui()
+            break
+    t.join()
 
 
 if __name__ == "__main__":

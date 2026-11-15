@@ -190,6 +190,35 @@ class SystemProvider(Provider):
                     return s
         return mgr.get_current_session() or sessions[0]
 
+    # ---- control hooks (SMTC by default; subclasses replace them) -----------
+    prefer_root = False
+
+    async def _ctl_info(self):
+        s = await self._session()
+        return s.source_app_user_model_id, s.get_playback_info().playback_status == Status.PLAYING
+
+    async def _ctl_play(self):
+        return await (await self._session()).try_play_async()
+
+    async def _ctl_pause(self):
+        await (await self._session()).try_pause_async()
+
+    async def _ctl_next(self):
+        await (await self._session()).try_skip_next_async()
+
+    async def _ctl_prev(self):
+        await (await self._session()).try_skip_previous_async()
+
+    async def _ctl_now(self):
+        s = await self._session()
+        p = await s.try_get_media_properties_async()
+        return {"title": p.title if p else "", "artist": p.artist if p else "",
+                "playing": s.get_playback_info().playback_status == Status.PLAYING,
+                "app": s.source_app_user_model_id}
+
+    def _app_tree(self, exes):
+        return app_pids(exes)
+
     # ---- helper calls --------------------------------------------------
     async def _run(self, *args):
         if not self.helper:
@@ -267,16 +296,16 @@ class SystemProvider(Provider):
         return self.output == "game" and self.capture is not None and self.fail_streak < 2
 
     async def play(self):
-        s = await self._session()
+        aumid, playing = await self._ctl_info()
         self.tuned = True
         self.fallback = None
-        exes = exes_for(s.source_app_user_model_id)
-        log(f"music app: {s.source_app_user_model_id}; output mode: {self.output}; helper: {'found' if self.helper else 'MISSING'}")
+        exes = exes_for(aumid)
+        log(f"music app: {aumid}; output mode: {self.output}; helper: {'found' if self.helper else 'MISSING'}")
         game_mix = self._game_mix()
         if game_mix:
             self.engine.flush()
-        if s.get_playback_info().playback_status != Status.PLAYING:
-            ok = await s.try_play_async()
+        if not playing:
+            ok = await self._ctl_play()
             log(f"sent play to the music app (accepted={ok})")
             self.we_started = True
         else:
@@ -287,7 +316,7 @@ class SystemProvider(Provider):
             self._monitor = asyncio.create_task(self._probe(exes))
 
     async def _candidates(self, exes):
-        root, app_all = app_pids(exes)
+        root, app_all = self._app_tree(exes)
         me, game = os.getpid(), self.game_pid or find_game_pid(self.game_process)
         sess = await self._sessions()
         skip = {0, me, game}
@@ -300,6 +329,8 @@ class SystemProvider(Provider):
         cands += [("active audio session", p, "include") for p, _, pk in sess if pk > AUDIBLE and p not in skip and p not in mine]
         if game:
             cands.append(("everything except the game", game, "exclude"))
+        if self.prefer_root and root:
+            cands.sort(key=lambda c: c[1] != root)
         if self.good:                                     # try what worked before first
             cands.sort(key=lambda c: c[0] != self.good)
         return cands, app_all | set(mine), audible_mine, audible_any
@@ -373,9 +404,8 @@ class SystemProvider(Provider):
         if self._monitor:
             self._monitor.cancel()
         try:
-            s = await self._session()
-            if self.we_started and s.get_playback_info().playback_status == Status.PLAYING:
-                await s.try_pause_async()
+            if self.we_started and (await self._ctl_info())[1]:
+                await self._ctl_pause()
                 log("sent pause to the music app")
         except ProviderError:
             pass
@@ -385,10 +415,10 @@ class SystemProvider(Provider):
             await self._restore()
 
     async def next(self):
-        await (await self._session()).try_skip_next_async()
+        await self._ctl_next()
 
     async def prev(self):
-        await (await self._session()).try_skip_previous_async()
+        await self._ctl_prev()
 
     async def set_output(self, mode):
         self.output = mode
@@ -400,11 +430,7 @@ class SystemProvider(Provider):
 
     async def refresh(self):
         try:
-            s = await self._session()
-            p = await s.try_get_media_properties_async()
-            self.now = {"title": p.title if p else "", "artist": p.artist if p else "",
-                        "playing": s.get_playback_info().playback_status == Status.PLAYING,
-                        "app": s.source_app_user_model_id}
+            self.now = await self._ctl_now()
             self.error = None
         except ProviderError as e:
             self.now, self.error = {}, str(e)

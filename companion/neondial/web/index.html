@@ -19,7 +19,8 @@ button.alt,select{background:#2a2a3a;color:#fff}
 <div class=card>
  Mode: <select id=mode onchange="setMode()">
   <option value=system>Music app (Apple Music / Spotify, must be open)</option>
-  <option value=standalone>Standalone Spotify (no app needed, Premium)</option></select>
+  <option value=standalone>Standalone Spotify (no app needed, Premium)</option>
+  <option value=apple-standalone>Standalone Apple Music (no app needed)</option></select>
  <div id=standaloneBox style="display:none;margin-top:8px;color:#9ab"></div>
 </div>
 <div class=card id=appCard>
@@ -38,16 +39,18 @@ async function ctl(a){const r=await post("/api/control",{action:a});if(r.error)a
 async function setApp(){await post("/api/music_app",{music_app:document.getElementById("app").value})}
 async function setOut(){await post("/api/output",{output:document.getElementById("out").value})}
 async function setMode(){await post("/api/mode",{mode:document.getElementById("mode").value})}
+async function win(v){const r=await post("/api/window",{show:v});if(r.error)alert(r.error)}
 async function quitApp(){await post("/api/quit",{});document.getElementById("status").textContent="Companion stopped."}
 let first=true;
 async function refresh(){
   const S=await j("/api/state"),n=S.now||{};
-  if(first){document.getElementById("mode").value=S.provider==="standalone"?"standalone":"system";document.getElementById("app").value=S.music_app||"auto";document.getElementById("out").value=S.output||"game";first=false}
+  if(first){document.getElementById("mode").value=S.provider;document.getElementById("app").value=S.music_app||"auto";document.getElementById("out").value=S.output||"game";first=false}
   let h='<span class=dot style="background:'+(S.tuned_in?"#3dff7a":"#555")+'"></span><b>'+(S.tuned_in?"Tuned in":"Idle")+"</b>";
-  const sa=S.provider==="standalone";
+  const ap=S.provider==="apple-standalone"; const sa=S.provider==="standalone"||ap;
   document.getElementById("appCard").style.display=sa?"none":"block";
   const box=document.getElementById("standaloneBox"); box.style.display=sa?"block":"none";
-  if(sa){box.textContent=(S.librespot_found?"":"librespot.exe is missing from the mod folder. ")+(S.standalone_status||"")+" - First time: log in to Spotify in the browser window that opens, then in any Spotify app choose the device \"Neon Dial FM\" and play a playlist. You can then close Spotify."}
+  if(ap){box.innerHTML=(S.apple_status||"")+'<br><button class=alt onclick="win(true)">Show Apple Music window</button><button class=alt onclick="win(false)">Hide window</button><br>First time: click Show window, sign in to Apple Music, start a playlist, then Hide window.'}
+  else if(sa){box.textContent=(S.librespot_found?"":"librespot.exe is missing from the mod folder. ")+(S.standalone_status||"")+" - First time: log in to Spotify in the browser window that opens, then in any Spotify app choose the device \"Neon Dial FM\" and play a playlist. You can then close Spotify."}
   if(n.title)h+="<br><br>♪ "+n.title+" — "+(n.artist||"")+(n.playing?"":" (paused)");
   if(S.output==="game"&&!sa){h+="<br>Audio path: "+(S.capturing?"<b>game radio mix</b> (capturing)":(S.fallback?"speakers (fallback)":(S.helper_found?"game radio mix (starts when you tune in)":"helper missing - using speakers")))}
   if(S.fallback)h+='<br><span class=err></span>';

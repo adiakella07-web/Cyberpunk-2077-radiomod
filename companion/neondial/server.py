@@ -165,10 +165,14 @@ def build_app(cfg, engine, provider):
 
     async def set_mode(request):
         mode = (await request.json()).get("mode")
-        if mode not in ("system", "standalone"):
-            raise ProviderError("mode must be system or standalone")
+        if mode not in ("system", "standalone", "apple-standalone"):
+            raise ProviderError("unknown mode")
         config_mod.save_settings({"provider": mode})
         await app["switch"](mode)
+        return {"ok": True}
+
+    async def window(request):
+        hub.provider.show_window(bool((await request.json()).get("show")))
         return {"ok": True}
 
     async def quit_app(_):
@@ -178,7 +182,7 @@ def build_app(cfg, engine, provider):
     app.add_routes([
         web.get("/", index), web.get("/{name}.mp3", stream), web.get("/api/state", state),
         web.post("/api/control", guarded(control)), web.post("/api/music_app", guarded(set_app)),
-        web.post("/api/output", guarded(set_output)), web.post("/api/mode", guarded(set_mode)), web.post("/api/quit", guarded(quit_app)),
+        web.post("/api/output", guarded(set_output)), web.post("/api/mode", guarded(set_mode)), web.post("/api/window", guarded(window)), web.post("/api/quit", guarded(quit_app)),
     ])
     app["hub"] = hub
     return app

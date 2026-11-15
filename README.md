@@ -19,7 +19,7 @@ Control panel (prev/next, choose music app): http://127.0.0.1:8765 while the gam
   While you're tuned in, the app's own Windows mixer volume is turned down so you don't hear it twice (capture happens before that stage).
   Tune away: the app pauses where it is and its volume is restored. Tune back: it resumes.
 
-## Two modes (switch in the control panel, http://127.0.0.1:8765)
+## Three modes (switch in the control panel, http://127.0.0.1:8765)
 **Music app mode** (default): works with Apple Music or Spotify running on your PC, as described above.
 
 **Standalone Spotify mode**: no music app needs to be open. Neon Dial runs its own Spotify Connect receiver
@@ -27,7 +27,11 @@ Control panel (prev/next, choose music app): http://127.0.0.1:8765 while the gam
 1. Switch Mode to *Standalone Spotify* in the control panel; log in to Spotify in the browser window that opens (once).
 2. In any Spotify app (your phone is fine) choose the device **Neon Dial FM** and start a playlist; you can then close Spotify.
 3. Tune to the station in-game: the music plays through the game's radio mix; tune away and it holds its place.
-Apple Music can't do this: Apple only allows its own apps to play its music, so Apple Music always needs the app open.
+**Standalone Apple Music mode**: no Apple Music app needed. Neon Dial hosts the normal Apple Music website (music.apple.com) in a
+built-in browser window (Microsoft Edge WebView2, already on Windows 11 and most Windows 10).
+1. Switch Mode to *Standalone Apple Music*. A window opens: sign in with your Apple ID and start a playlist, then click **Hide window**.
+2. Tune to the station: the page plays, its audio is captured from Neon Dial's own browser processes and goes through the game's radio mix. Tune away: it pauses and keeps its place.
+No developer account or tokens, it is just you logged in on the website. (Apple's DRM allows playback only in approved players such as its website, so this is the only app-free route.)
 
 ## Controls
 Everything is the normal in-game radio: station wheel/next/previous (switching away pauses, switching back resumes), radio on/off, the radio volume slider.
@@ -42,7 +46,7 @@ Prev/next track and app choice are in the control panel; in standalone mode use 
 - librespot is an unofficial Spotify client; using it is a grey area under Spotify's terms.
 
 ## Status
-Early release. Verified in development: the stream, tune-in/out logic and live-audio path (with a stand-in for the capture helper), and that the Windows binaries build in CI. Not verified on a real PC by me: capture of Apple Music/Spotify and the volume handling (the app logs what it finds), and standalone mode. Please report how it behaves in-game via [Issues](../../issues).
+Early release. Verified in development: the stream, tune-in/out logic and live-audio path (with a stand-in for the capture helper), and that the Windows binaries build in CI. Not verified on a real PC by me: capture of Apple Music/Spotify and the volume handling (the app logs what it finds), and the two standalone modes. Please report how it behaves in-game via [Issues](../../issues).
 
 ## Developing
 - `companion/`: Python companion (`python companion/run.py --provider demo` plays a test tone when you tune in; needs Python 3.11+).
