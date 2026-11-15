@@ -1,0 +1,5 @@
+# Optional. Copy to config.toml next to the exe/run.py to override defaults.
+port = 8765
+provider = "system"        # "system" = control your running music app, "demo" = test tone
+music_app = "auto"         # auto | apple | spotify | itunes
+idle_pause_seconds = 6     # pause this long after you tune away from the station

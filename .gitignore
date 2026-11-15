@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+companion/dist/
+companion/build/
+launcher/build/
+launcher/RED4ext.SDK/
+*.spec

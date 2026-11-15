@@ -1,0 +1,16 @@
+{
+    "displayName": "Neon Dial FM",
+    "fm": 109.9,
+    "volume": 1.0,
+    "icon": "default",
+    "customIcon": {
+        "inkAtlasPath": "",
+        "inkAtlasPart": "",
+        "useCustom": false
+    },
+    "streamInfo": {
+        "streamURL": "http://127.0.0.1:8765/stream.mp3",
+        "isStream": true
+    },
+    "order": []
+}

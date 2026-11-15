@@ -1,0 +1,6 @@
+aiohttp>=3.9
+lameenc>=1.7
+winrt-runtime>=3.0; sys_platform == "win32"
+winrt-Windows.Media.Control>=3.0; sys_platform == "win32"
+winrt-Windows.Foundation>=3.0; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=3.0; sys_platform == "win32"

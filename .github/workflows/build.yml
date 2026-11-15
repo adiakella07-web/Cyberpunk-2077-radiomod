@@ -1,0 +1,32 @@
+name: build-vortex-zip
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build companion exe
+        working-directory: companion
+        run: |
+          python -m pip install -r requirements.txt pyinstaller
+          python -m PyInstaller --noconfirm --onefile --windowed --name NeonDial --add-data "neondial/web;neondial/web" --collect-submodules winrt run.py
+      - name: Build RED4ext launcher plugin
+        run: |
+          git clone --depth 1 https://github.com/WopsS/RED4ext.SDK launcher/RED4ext.SDK
+          cmake -S launcher -B launcher/build -A x64
+          cmake --build launcher/build --config Release
+      - name: Package for Vortex
+        run: python tools/make_vortex_zip.py companion/dist/NeonDial.exe launcher/build/Release/NeonDial.dll NeonDial-vortex.zip
+      - uses: actions/upload-artifact@v4
+        with: { name: NeonDial-vortex, path: NeonDial-vortex.zip }
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: gh release create "${{ github.ref_name }}" NeonDial-vortex.zip --title "Neon Dial ${{ github.ref_name }}" --notes "Add NeonDial-vortex.zip to Vortex. Requires Cyber Engine Tweaks, RED4ext and RadioExt. Open your music app first, then tune to Neon Dial FM."
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
