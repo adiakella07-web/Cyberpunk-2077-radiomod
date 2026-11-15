@@ -30,6 +30,9 @@ def make_provider(cfg, engine):
     if name == "demo":
         from .providers.demo import DemoProvider
         return DemoProvider(cfg, engine)
+    if name == "standalone":
+        from .providers.standalone import StandaloneProvider
+        return StandaloneProvider(cfg, engine)
     from .providers.system import SystemProvider
     return SystemProvider(cfg, engine)
 
@@ -61,6 +64,19 @@ async def serve(cfg, engine, provider, ready, watch, watch_pid_arg=None):
         finally:
             os._exit(0)
     app["shutdown"] = shutdown
+
+    async def switch(mode):
+        hub = app["hub"]
+        await hub.provider.stop()
+        cfg["provider"] = mode
+        engine.hold = False
+        engine.flush()
+        new = make_provider(cfg, engine)
+        hub.provider = new
+        await new.start()
+        if hub.tuned:
+            await new.play()
+    app["switch"] = switch
     runner = web.AppRunner(app)
     await runner.setup()
     # 127.0.0.1 only: nothing on your network can reach this.
@@ -106,6 +122,9 @@ def selftest(path):
         ok &= (WEB / "index.html").exists()
         import aiohttp
         import lameenc  # noqa: F401
+        from .providers.standalone import StandaloneProvider, librespot_path
+        StandaloneProvider({}, AudioEngine())
+        log_(f"standalone provider ok; librespot present: {librespot_path()}")
 
         async def go():
             cfg = config_mod.load()
@@ -133,7 +152,7 @@ def selftest(path):
 
         ok &= bool(asyncio.run(go()))
         if helper:
-            for args in (["volume", "1.0", "0"], ["capture", "0"]):
+            for args in (["sessions"], ["volume", "1.0", "0"], ["capture", "0"]):
                 try:
                     r = subprocess.run([str(helper), *args], capture_output=True, text=True, timeout=8)
                     log_(f"helper {' '.join(args)} -> rc={r.returncode} {r.stderr.strip()[:150]}")
@@ -160,6 +179,7 @@ def cli():
     cfg = config_mod.load(args.config)
     if args.provider:
         cfg["provider"] = args.provider
+    cfg["game_pid"] = args.watch_pid
 
     engine = AudioEngine()
     provider = make_provider(cfg, engine)

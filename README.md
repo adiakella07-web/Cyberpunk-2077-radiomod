@@ -19,17 +19,30 @@ Control panel (prev/next, choose music app): http://127.0.0.1:8765 while the gam
   While you're tuned in, the app's own Windows mixer volume is turned down so you don't hear it twice (capture happens before that stage).
   Tune away: the app pauses where it is and its volume is restored. Tune back: it resumes.
 
+## Two modes (switch in the control panel, http://127.0.0.1:8765)
+**Music app mode** (default): works with Apple Music or Spotify running on your PC, as described above.
+
+**Standalone Spotify mode**: no music app needs to be open. Neon Dial runs its own Spotify Connect receiver
+(librespot) that shows up in Spotify as the device **"Neon Dial FM"**. Needs Spotify Premium.
+1. Switch Mode to *Standalone Spotify* in the control panel; log in to Spotify in the browser window that opens (once).
+2. In any Spotify app (your phone is fine) choose the device **Neon Dial FM** and start a playlist; you can then close Spotify.
+3. Tune to the station in-game: the music plays through the game's radio mix; tune away and it holds its place.
+Apple Music can't do this: Apple only allows its own apps to play its music, so Apple Music always needs the app open.
+
 ## Controls
-Everything is the normal in-game radio: station wheel/next/previous (switching away pauses, switching back resumes), radio on/off, the radio volume slider. Extra: prev/next track and app choice at http://127.0.0.1:8765.
+Everything is the normal in-game radio: station wheel/next/previous (switching away pauses, switching back resumes), radio on/off, the radio volume slider.
+Prev/next track and app choice are in the control panel; in standalone mode use your Spotify app for those.
 
 ## Limits
-- Windows 10 (2004+) / 11 only. The music app must be running with a playlist loaded.
-- If capture ever gets silence while the app is playing, Neon Dial puts the app's volume back and plays through your speakers instead (shown in the control panel; "Audio" setting can force plain speakers).
-- If the companion is killed while you're tuned in, the app's volume stays low until you next start Neon Dial (it restores on launch) or raise it in the Windows volume mixer.
-- Some apps may refuse capture; Apple Music's Windows app and Spotify are the targets.
+- Windows 10 (2004+) / 11 only.
+- Music app mode: the app must be running with a playlist loaded. Neon Dial finds which process is really playing the
+  sound, tests capture strategies and only keeps one that works; otherwise it restores the app's volume and plays through your speakers
+  (the control panel shows which path is active, and an Activity log explains why).
+- If the companion is killed while you're tuned in, the app's volume stays low until Neon Dial next starts (it restores on launch) or you raise it in the Windows volume mixer.
+- librespot is an unofficial Spotify client; using it is a grey area under Spotify's terms.
 
 ## Status
-Early release. Verified in development: the stream, tune-in/out logic and live-audio path (with a stand-in for the capture helper), and that the Windows binaries build in CI. Not yet verified on a real PC: process-loopback capture of Apple Music/Spotify and the volume handling. Please report how it behaves in-game via [Issues](../../issues).
+Early release. Verified in development: the stream, tune-in/out logic and live-audio path (with a stand-in for the capture helper), and that the Windows binaries build in CI. Not verified on a real PC by me: capture of Apple Music/Spotify and the volume handling (the app logs what it finds), and standalone mode. Please report how it behaves in-game via [Issues](../../issues).
 
 ## Developing
 - `companion/`: Python companion (`python companion/run.py --provider demo` plays a test tone when you tune in; needs Python 3.11+).

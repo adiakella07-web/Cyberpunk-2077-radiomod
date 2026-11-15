@@ -69,7 +69,7 @@ def make_stream_handler(engine, hub):
             return
         method = head.split(b" ", 1)[0]
         writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\nicy-name: Neon Dial FM\r\n"
-                     b"icy-br: 192\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
+                     b"icy-br: 320\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
         if method != b"GET":
             await writer.drain()
             writer.close()
@@ -118,11 +118,11 @@ def build_app(cfg, engine, provider):
         return web.FileResponse(WEB / "index.html")
 
     async def state(_):
-        if hasattr(provider, "refresh"):
-            await provider.refresh()
-        s = {"provider": provider.name, "tuned_in": hub.tuned, "listeners": hub.listeners, "error": hub.error,
+        if hasattr(hub.provider, "refresh"):
+            await hub.provider.refresh()
+        s = {"provider": hub.provider.name, "tuned_in": hub.tuned, "listeners": hub.listeners, "error": hub.error,
              "log": recent(15)}
-        s.update(provider.state())
+        s.update(hub.provider.state())
         return web.json_response(s)
 
     def guarded(fn):
@@ -138,9 +138,9 @@ def build_app(cfg, engine, provider):
     async def control(request):
         action = (await request.json()).get("action")
         if action == "next":
-            await provider.next()
+            await hub.provider.next()
         elif action == "prev":
-            await provider.prev()
+            await hub.provider.prev()
         elif action == "play":
             await hub._set(True)
         elif action == "pause":
@@ -152,7 +152,7 @@ def build_app(cfg, engine, provider):
     async def set_app(request):
         app_name = ((await request.json()).get("music_app") or "auto").strip().lower()
         config_mod.save_settings({"music_app": app_name})
-        provider.pref = app_name
+        hub.provider.pref = app_name
         return {"ok": True}
 
     async def set_output(request):
@@ -160,7 +160,15 @@ def build_app(cfg, engine, provider):
         if mode not in ("game", "speakers"):
             raise ProviderError("output must be game or speakers")
         config_mod.save_settings({"output": mode})
-        await provider.set_output(mode)
+        await hub.provider.set_output(mode)
+        return {"ok": True}
+
+    async def set_mode(request):
+        mode = (await request.json()).get("mode")
+        if mode not in ("system", "standalone"):
+            raise ProviderError("mode must be system or standalone")
+        config_mod.save_settings({"provider": mode})
+        await app["switch"](mode)
         return {"ok": True}
 
     async def quit_app(_):
@@ -170,7 +178,7 @@ def build_app(cfg, engine, provider):
     app.add_routes([
         web.get("/", index), web.get("/{name}.mp3", stream), web.get("/api/state", state),
         web.post("/api/control", guarded(control)), web.post("/api/music_app", guarded(set_app)),
-        web.post("/api/output", guarded(set_output)), web.post("/api/quit", guarded(quit_app)),
+        web.post("/api/output", guarded(set_output)), web.post("/api/mode", guarded(set_mode)), web.post("/api/quit", guarded(quit_app)),
     ])
     app["hub"] = hub
     return app

@@ -1,5 +1,6 @@
 // NeonDialAudio.exe - tiny helper for Neon Dial.
-//   NeonDialAudio.exe capture <pid>             raw PCM (S16LE, 44.1 kHz, stereo) of that app (and its child processes)
+//   NeonDialAudio.exe sessions                  list audio sessions on the default output: "<pid> <state 0=inactive 1=active> <peak>"
+//   NeonDialAudio.exe capture <pid> [exclude]   raw PCM (S16LE, 44.1 kHz, stereo) of that app (and its child processes)
 //                                               to stdout, via Windows process loopback. Needs Windows 10 2004+.
 //   NeonDialAudio.exe volume <0..1> <pid>...    set the Windows mixer volume of those apps' sessions; prints "<pid> <previous>"
 #define WIN32_LEAN_AND_MEAN
@@ -10,6 +11,7 @@
 #include <audioclient.h>
 #include <audioclientactivationparams.h>
 #include <audiopolicy.h>
+#include <endpointvolume.h>
 
 #include <fcntl.h>
 #include <io.h>
@@ -68,13 +70,14 @@ public:
     }
 };
 
-int Capture(DWORD pid)
+int Capture(DWORD pid, bool exclude)
 {
     _setmode(_fileno(stdout), _O_BINARY);
     AUDIOCLIENT_ACTIVATION_PARAMS params{};
     params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
     params.ProcessLoopbackParams.TargetProcessId = pid;
-    params.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+    params.ProcessLoopbackParams.ProcessLoopbackMode =
+        exclude ? PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE : PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
 
     PROPVARIANT pv{};
     pv.vt = VT_BLOB;
@@ -156,6 +159,51 @@ int Capture(DWORD pid)
     }
 }
 
+int ListSessions()
+{
+    IMMDeviceEnumerator* en = nullptr;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                reinterpret_cast<void**>(&en))))
+        return 2;
+    IMMDevice* dev = nullptr;
+    if (FAILED(en->GetDefaultAudioEndpoint(eRender, eMultimedia, &dev)))
+        return 3;
+    IAudioSessionManager2* mgr = nullptr;
+    if (FAILED(dev->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&mgr))))
+        return 4;
+    IAudioSessionEnumerator* se = nullptr;
+    if (FAILED(mgr->GetSessionEnumerator(&se)))
+        return 5;
+    int count = 0;
+    se->GetCount(&count);
+    for (int i = 0; i < count; ++i)
+    {
+        IAudioSessionControl* ctl = nullptr;
+        if (FAILED(se->GetSession(i, &ctl)))
+            continue;
+        IAudioSessionControl2* ctl2 = nullptr;
+        if (SUCCEEDED(ctl->QueryInterface(__uuidof(IAudioSessionControl2), reinterpret_cast<void**>(&ctl2))))
+        {
+            DWORD pid = 0;
+            ctl2->GetProcessId(&pid);
+            AudioSessionState state = AudioSessionStateInactive;
+            ctl->GetState(&state);
+            float peak = 0.0f;
+            IAudioMeterInformation* meter = nullptr;
+            if (SUCCEEDED(ctl->QueryInterface(__uuidof(IAudioMeterInformation), reinterpret_cast<void**>(&meter))))
+            {
+                meter->GetPeakValue(&peak);
+                meter->Release();
+            }
+            printf("%lu %d %.4f\n", static_cast<unsigned long>(pid), static_cast<int>(state), peak);
+            ctl2->Release();
+        }
+        ctl->Release();
+    }
+    fflush(stdout);
+    return 0;
+}
+
 int SetVolume(float volume, const std::set<DWORD>& pids)
 {
     IMMDeviceEnumerator* en = nullptr;
@@ -207,8 +255,10 @@ int SetVolume(float volume, const std::set<DWORD>& pids)
 int wmain(int argc, wchar_t** argv)
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (argc >= 2 && wcscmp(argv[1], L"sessions") == 0)
+        return ListSessions();
     if (argc >= 3 && wcscmp(argv[1], L"capture") == 0)
-        return Capture(static_cast<DWORD>(wcstoul(argv[2], nullptr, 10)));
+        return Capture(static_cast<DWORD>(wcstoul(argv[2], nullptr, 10)), argc >= 4 && wcscmp(argv[3], L"exclude") == 0);
     if (argc >= 4 && wcscmp(argv[1], L"volume") == 0)
     {
         std::set<DWORD> pids;
@@ -216,6 +266,6 @@ int wmain(int argc, wchar_t** argv)
             pids.insert(static_cast<DWORD>(wcstoul(argv[i], nullptr, 10)));
         return SetVolume(static_cast<float>(wcstod(argv[2], nullptr)), pids);
     }
-    fprintf(stderr, "usage: NeonDialAudio capture <pid> | volume <0..1> <pid>...\n");
+    fprintf(stderr, "usage: NeonDialAudio sessions | capture <pid> [exclude] | volume <0..1> <pid>...\n");
     return 1;
 }

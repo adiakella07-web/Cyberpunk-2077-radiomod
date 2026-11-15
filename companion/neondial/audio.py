@@ -13,14 +13,14 @@ BPS = RATE * CH * 2                  # bytes per second of S16 PCM
 FRAME_SEC = 0.1
 FRAME_BYTES = int(BPS * FRAME_SEC)   # 17640 (multiple of 4)
 MAX_BUFFER = BPS                     # 1 s look-ahead for back-pressured sources (demo)
-PRIME_BYTES = int(BPS * 0.15)        # live sources: build this much cushion before playing
-LIVE_MAX = int(BPS * 0.35)           # live sources: never hold more than this (drops oldest)
-PREROLL_SEC = 0.4
+PRIME_BYTES = int(BPS * 0.08)        # live sources: build this much cushion before playing
+LIVE_MAX = int(BPS * 0.25)           # live sources: never hold more than this (drops oldest)
+PREROLL_SEC = 0.8
 
 
 def _encoder():
     e = lameenc.Encoder()
-    e.set_bit_rate(192)
+    e.set_bit_rate(320)   # higher rate = the game's fixed-size stream buffer fills sooner
     e.set_in_sample_rate(RATE)
     e.set_channels(CH)
     e.set_quality(2)
@@ -33,6 +33,7 @@ class AudioEngine:
         self.clients: set[asyncio.Queue] = set()
         self._enc = _encoder()
         self._primed = False
+        self.hold = False                 # set by sources that want audio kept while idle
         # Sent instantly to every new listener so the game's stream buffer fills at once and the
         # station "starts" immediately (music then follows live).
         pre = _encoder()
@@ -79,6 +80,11 @@ class AudioEngine:
         next_t = time.monotonic()
         silence = b"\x00" * FRAME_BYTES
         while True:
+            if self.hold and not self.clients:
+                # nobody is tuned in: keep any buffered audio for when they come back
+                next_t += FRAME_SEC
+                await asyncio.sleep(max(0, next_t - time.monotonic()))
+                continue
             if not self._primed and len(self.buf) >= FRAME_BYTES + PRIME_BYTES:
                 self._primed = True
             if self._primed and len(self.buf) >= FRAME_BYTES:

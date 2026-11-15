@@ -1,13 +1,15 @@
 """Plays your running music app (Apple Music, Spotify, iTunes) as the in-game station.
 
-Two parts:
   * Control: Windows' built-in media controls (SMTC) press play/pause. No accounts or tokens.
-  * Audio:   NeonDialAudio.exe captures just that app's audio (Windows "process loopback") and we stream
-             it to the game, so it plays through the game's radio mix. The app's own Windows mixer volume is
-             turned down meanwhile so you don't hear it twice (capture happens before that volume stage).
-             If capture turns out to be silent, we put the volume back and fall back to plain speakers.
-Tune in -> play. Tune out -> pause (resumes where it left off) and the app's volume is restored.
+  * Audio:   NeonDialAudio.exe captures that app's audio (Windows "process loopback"); we stream it to the
+             game so it plays through the game's radio mix (radio volume, muffling, station switching).
+             The app's own mixer volume is turned down meanwhile so you don't hear it twice.
+
+Nothing is assumed: after pressing play we find the process that is really making sound, try capture
+strategies in turn, and only keep one that is verified to deliver audio. If none works (or turning the app
+down silences the capture) we put the volume back and play through the speakers.
 """
+import array
 import asyncio
 import json
 import os
@@ -32,10 +34,11 @@ except Exception:  # pragma: no cover
     AVAILABLE = False
 
 PREFERRED = ("applemusic", "apple", "itunes", "spotify", "music")
-EXES = (("applemusic", ["applemusic.exe"]), ("itunes", ["itunes.exe"]), ("apple", ["applemusic.exe", "itunes.exe"]),
-        ("spotify", ["spotify.exe"]))
+EXES = (("applemusic", ["applemusic.exe"]), ("itunes", ["itunes.exe"]),
+        ("apple", ["applemusic.exe", "itunes.exe"]), ("spotify", ["spotify.exe"]))
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 STATE_FILE = DATA_DIR / "volume_state.json"
+AUDIBLE = 0.002
 
 
 def helper_path():
@@ -58,10 +61,7 @@ def exes_for(aumid: str):
 
 def app_pids(exe_names):
     """-> (root pid, every pid of the app incl. children)"""
-    procs = []
-    for p in psutil.process_iter(["name", "pid", "ppid"]):
-        if (p.info["name"] or "").lower() in exe_names:
-            procs.append(p)
+    procs = [p for p in psutil.process_iter(["name", "pid", "ppid"]) if (p.info["name"] or "").lower() in exe_names]
     pids = {p.pid for p in procs}
     roots = [p for p in procs if p.info["ppid"] not in pids]
     root = roots[0] if roots else None
@@ -74,25 +74,43 @@ def app_pids(exe_names):
     return (root.pid if root else None), allp
 
 
+def related(pid, app_all, exes):
+    if pid in app_all:
+        return True
+    try:
+        p = psutil.Process(pid)
+        if (p.name() or "").lower() in exes:
+            return True
+        return bool({a.pid for a in p.parents()} & app_all)
+    except psutil.Error:
+        return False
+
+
+def find_game_pid(name="Cyberpunk2077.exe"):
+    for p in psutil.process_iter(["name", "pid"]):
+        if (p.info["name"] or "").lower() == name.lower():
+            return p.pid
+    return None
+
+
 class Capture:
     def __init__(self, engine, helper):
         self.engine, self.helper = engine, helper
-        self.proc = None
-        self.pid = None
-        self.task = None
+        self.proc = self.task = None
+        self.key = None
         self.last_audio = 0.0
-        self.started = 0.0
+        self.max_peak = 0
 
     @property
     def running(self):
         return self.proc is not None and self.proc.returncode is None
 
-    async def start(self, pid):
+    async def start(self, pid, mode="include"):
         await self.stop()
         self.proc = await asyncio.create_subprocess_exec(
-            str(self.helper), "capture", str(pid),
+            str(self.helper), "capture", str(pid), mode,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
-        self.pid, self.started, self.last_audio = pid, time.monotonic(), 0.0
+        self.key, self.last_audio, self.max_peak = (pid, mode), 0.0, 0
         self.task = asyncio.create_task(self._read(self.proc))
 
     async def _read(self, proc):
@@ -100,8 +118,14 @@ class Capture:
             data = await proc.stdout.read(8192)
             if not data:
                 break
-            if data.count(0) != len(data):
-                self.last_audio = time.monotonic()
+            n = len(data) // 4 * 4
+            if n and data.count(0) != len(data):
+                a = array.array("h")
+                a.frombytes(data[:n])
+                peak = max(max(a), -min(a))
+                if peak > 0:
+                    self.last_audio = time.monotonic()
+                    self.max_peak = max(self.max_peak, peak)
             self.engine.feed_live(data)
         err = (await proc.stderr.read()).decode(errors="replace").strip()
         if err:
@@ -123,6 +147,8 @@ class SystemProvider(Provider):
 
     def __init__(self, cfg, engine):
         self.engine = engine
+        self.game_process = cfg.get("game_process", "Cyberpunk2077.exe")
+        self.game_pid = cfg.get("game_pid")
         self.pref = (cfg.get("music_app") or "auto").lower()
         self.output = cfg.get("output", "game")          # game | speakers
         self.helper = helper_path()
@@ -130,8 +156,11 @@ class SystemProvider(Provider):
         self.mgr = None
         self.tuned = False
         self.we_started = False
-        self.fallback = None                              # reason string if we fell back to speakers
-        self.orig = None                                  # app volume before we lowered it
+        self.fallback = None
+        self.fail_streak = 0
+        self.good = None                                  # label of the capture strategy that worked last
+        self.strategy = None
+        self.orig = None
         self.vol_pids = set()
         self.now, self.apps, self.error = {}, [], None
         self._monitor = None
@@ -162,15 +191,30 @@ class SystemProvider(Provider):
         return mgr.get_current_session() or sessions[0]
 
     # ---- helper calls --------------------------------------------------
-    async def _volume(self, vol, pids):
-        if not self.helper or not pids:
-            return {}
+    async def _run(self, *args):
+        if not self.helper:
+            return ""
         proc = await asyncio.create_subprocess_exec(
-            str(self.helper), "volume", f"{vol:.3f}", *map(str, sorted(pids)),
+            str(self.helper), *map(str, args),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, creationflags=NO_WINDOW)
         out, _ = await proc.communicate()
+        return out.decode(errors="replace")
+
+    async def _sessions(self):
+        res = []
+        for line in (await self._run("sessions")).splitlines():
+            try:
+                pid, state, peak = line.split()
+                res.append((int(pid), int(state), float(peak)))
+            except ValueError:
+                pass
+        return res
+
+    async def _volume(self, vol, pids):
+        if not pids:
+            return {}
         res = {}
-        for line in out.decode(errors="replace").splitlines():
+        for line in (await self._run("volume", f"{vol:.3f}", *sorted(pids))).splitlines():
             try:
                 pid, prev = line.split()
                 res[int(pid)] = float(prev)
@@ -182,21 +226,17 @@ class SystemProvider(Provider):
         prev = await self._volume(0.0, pids)
         if prev:
             if self.orig is None:
-                log(f"turned the music app's own volume down (was {max(prev.values()):.2f})")
                 best = max(prev.values())
-                self.orig = best if best > 0.05 else 1.0     # 0 = leftover from a crash -> assume full
+                self.orig = best if best > 0.05 else 1.0
+                log(f"turned the music app's own volume down (was {self.orig:.2f})")
             self.vol_pids |= set(prev)
             STATE_FILE.write_text(json.dumps({"orig": self.orig, "pids": sorted(self.vol_pids)}))
         return bool(prev)
 
     async def _restore(self):
         if self.orig is not None:
-            pids = set(self.vol_pids)
-            try:
-                pids |= app_pids(exes_for((self.now or {}).get("app", "")))[1]
-            except Exception:
-                pass
-            await self._volume(self.orig, pids)
+            await self._volume(self.orig, set(self.vol_pids))
+            log("restored the music app's volume")
         self.orig, self.vol_pids = None, set()
         try:
             STATE_FILE.unlink()
@@ -204,7 +244,6 @@ class SystemProvider(Provider):
             pass
 
     async def recover(self):
-        """If we crashed while the app was turned down, put it back."""
         try:
             st = json.loads(STATE_FILE.read_text())
         except Exception:
@@ -225,56 +264,109 @@ class SystemProvider(Provider):
             await self.capture.stop()
 
     def _game_mix(self):
-        return self.output == "game" and self.capture is not None and not self.fallback
+        return self.output == "game" and self.capture is not None and self.fail_streak < 2
 
     async def play(self):
         s = await self._session()
         self.tuned = True
+        self.fallback = None
+        exes = exes_for(s.source_app_user_model_id)
         log(f"music app: {s.source_app_user_model_id}; output mode: {self.output}; helper: {'found' if self.helper else 'MISSING'}")
-        pids = set()
-        if self._game_mix():
-            root, pids = app_pids(exes_for(s.source_app_user_model_id))
-            log(f"app process root pid={root}, {len(pids)} process(es)")
-            if root:
-                if not self.capture.running or self.capture.pid != root:
-                    await self.capture.start(root)
-                self.engine.flush()
-                log("capture started" if self.capture.running else "capture helper failed to start")
-                await self._duck(pids)
-            else:
-                pids = set()
+        game_mix = self._game_mix()
+        if game_mix:
+            self.engine.flush()
         if s.get_playback_info().playback_status != Status.PLAYING:
             ok = await s.try_play_async()
             log(f"sent play to the music app (accepted={ok})")
             self.we_started = True
         else:
             log("music app was already playing")
-        if pids:
+        if game_mix:
             if self._monitor:
                 self._monitor.cancel()
-            self._monitor = asyncio.create_task(self._after_play(pids))
+            self._monitor = asyncio.create_task(self._probe(exes))
 
-    async def _after_play(self, pids):
+    async def _candidates(self, exes):
+        root, app_all = app_pids(exes)
+        me, game = os.getpid(), self.game_pid or find_game_pid(self.game_process)
+        sess = await self._sessions()
+        skip = {0, me, game}
+        mine = sorted(p for p, _, _ in sess if p not in skip and related(p, app_all, exes))
+        audible_mine = any(pk > AUDIBLE for p, _, pk in sess if p in mine)
+        audible_any = any(pk > AUDIBLE for p, _, pk in sess if p not in skip)
+        cands = [("app audio session", p, "include") for p in mine]
+        if root and root not in mine:
+            cands.append(("app main process", root, "include"))
+        cands += [("active audio session", p, "include") for p, _, pk in sess if pk > AUDIBLE and p not in skip and p not in mine]
+        if game:
+            cands.append(("everything except the game", game, "exclude"))
+        if self.good:                                     # try what worked before first
+            cands.sort(key=lambda c: c[0] != self.good)
+        return cands, app_all | set(mine), audible_mine, audible_any
+
+    async def _probe(self, exes):
+        """Find a capture strategy that really delivers audio, then silence the app's speakers."""
         t0 = time.monotonic()
-        # the app's mixer session may only appear once audio starts: keep turning it down briefly
-        while self.tuned and time.monotonic() - t0 < 4:
-            await self._duck(pids)
-            await asyncio.sleep(0.25)
-        # self-check: audio must actually arrive through capture, otherwise fall back to speakers
-        while self.tuned:
-            await asyncio.sleep(1)
-            try:
-                s = await self._session()
-                playing = s.get_playback_info().playback_status == Status.PLAYING
-            except Exception:
+        tried, cur, cur_start, audible_since = set(), None, 0.0, None
+        success = None
+        while self.tuned and time.monotonic() - t0 < 40:
+            cands, duck_pids, aud_mine, aud_any = await self._candidates(exes)
+            if cur is None:
+                nxt = next((c for c in cands if (c[1], c[2]) not in tried), None)
+                if nxt is None:
+                    if aud_any and time.monotonic() - t0 > 6:
+                        break                              # exhausted every strategy
+                    await asyncio.sleep(0.5)
+                    continue
+                cur = nxt
+                tried.add((cur[1], cur[2]))
+                await self.capture.start(cur[1], cur[2])
+                cur_start, audible_since = time.monotonic(), None
+                log(f"trying capture: {cur[0]} (pid {cur[1]}, {cur[2]})")
+            if self.capture.last_audio > cur_start:
+                success = (cur, duck_pids)
+                break
+            if not self.capture.running:
+                log(f"capture '{cur[0]}' stopped unexpectedly")
+                cur = None
                 continue
-            silent_for = time.monotonic() - max(self.capture.last_audio, t0 + 2)
-            if playing and silent_for > 6:
-                self.fallback = "Couldn't capture the music app's audio; playing through your speakers instead."
-                log(self.fallback)
-                await self._restore()
-                await self.capture.stop()
-                return
+            if aud_mine or aud_any:
+                audible_since = audible_since or time.monotonic()
+                if time.monotonic() - audible_since > 2.5:
+                    log(f"capture '{cur[0]}' heard nothing although the app is playing")
+                    cur = None
+                    continue
+            await asyncio.sleep(0.25)
+        if not self.tuned:
+            return
+        if not success:
+            await self._give_up("Couldn't capture the music app's audio (or it never started); playing through your speakers.")
+            return
+        cur, duck_pids = success
+        log(f"capture works via '{cur[0]}' (peak {self.capture.max_peak})")
+        await self._duck(duck_pids)
+        t_duck = time.monotonic()
+        await asyncio.sleep(2.0)
+        if self.capture.last_audio < t_duck:
+            await self._give_up("Turning the music app down also silences the capture, so it would play twice; using your speakers.")
+            return
+        self.good, self.strategy, self.fail_streak = cur[0], cur[0], 0
+        log("game radio mix active")
+        while self.tuned:                                  # keep it ducked / capture alive
+            await asyncio.sleep(2.5)
+            if not self.capture.running:
+                await self.capture.start(cur[1], cur[2])
+            cands, duck_pids, _, _ = await self._candidates(exes)
+            await self._duck(duck_pids)
+
+    async def _give_up(self, why):
+        self.fallback = why
+        self.fail_streak += 1
+        log(why)
+        await self._restore()
+        if self.capture:
+            await self.capture.stop()
+        self.engine.flush()
 
     async def pause(self):
         self.tuned = False
@@ -284,11 +376,12 @@ class SystemProvider(Provider):
             s = await self._session()
             if self.we_started and s.get_playback_info().playback_status == Status.PLAYING:
                 await s.try_pause_async()
+                log("sent pause to the music app")
         except ProviderError:
             pass
         finally:
             self.we_started = False
-            await asyncio.sleep(0.3)       # let the pause land before the volume comes back
+            await asyncio.sleep(0.3)
             await self._restore()
 
     async def next(self):
@@ -299,7 +392,7 @@ class SystemProvider(Provider):
 
     async def set_output(self, mode):
         self.output = mode
-        self.fallback = None
+        self.fallback, self.fail_streak = None, 0
         if mode == "speakers":
             await self._restore()
             if self.capture:
@@ -321,5 +414,5 @@ class SystemProvider(Provider):
     def state(self):
         return {"now": self.now, "apps": self.apps, "music_app": self.pref, "provider_error": self.error,
                 "output": self.output, "helper_found": self.helper is not None,
-                "capturing": bool(self.capture and self.capture.running and self._game_mix()),
-                "fallback": self.fallback}
+                "capturing": bool(self.capture and self.capture.running and self.orig is not None),
+                "strategy": self.strategy, "fallback": self.fallback}
