@@ -5,6 +5,7 @@ import pathlib
 from aiohttp import web
 
 from . import config as config_mod
+from .log import log, recent
 from .providers import ProviderError
 
 WEB = pathlib.Path(__file__).parent / "web"
@@ -28,11 +29,13 @@ class Hub:
         if self._idle_task:
             self._idle_task.cancel()
             self._idle_task = None
+        log(f"game connected to the stream (listeners={self.listeners})")
         if not self.tuned:
             asyncio.create_task(self._set(True))
 
     def disconnected(self):
         self.listeners = max(0, self.listeners - 1)
+        log(f"game disconnected from the stream (listeners={self.listeners})")
         if self.listeners == 0 and self.tuned:
             self._idle_task = asyncio.create_task(self._idle_pause())
 
@@ -44,15 +47,50 @@ class Hub:
     async def _set(self, on):
         async with self._lock:
             self.tuned = on
+            log("tuned in -> play" if on else "tuned out -> pause")
             try:
                 await (self.provider.play() if on else self.provider.pause())
                 self.error = None
             except ProviderError as e:
                 self.error = str(e)
-                print("[hub]", e)
+                log(f"error: {e}")
             except Exception as e:
                 self.error = f"{type(e).__name__}: {e}"
-                print("[hub]", self.error)
+                log(f"error: {self.error}")
+
+
+def make_stream_handler(engine, hub):
+    """Plain Icecast-style stream (HTTP/1.0, no chunking): what the game's FMOD audio engine expects."""
+    async def handle(reader, writer):
+        try:
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        except Exception:
+            writer.close()
+            return
+        method = head.split(b" ", 1)[0]
+        writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\nicy-name: Neon Dial FM\r\n"
+                     b"icy-br: 192\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
+        if method != b"GET":
+            await writer.drain()
+            writer.close()
+            return
+        writer.write(engine.preroll)
+        q = engine.add_client()
+        hub.connected()
+        try:
+            while True:
+                writer.write(await q.get())
+                await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            engine.remove_client(q)
+            hub.disconnected()
+            try:
+                writer.close()
+            except Exception:
+                pass
+    return handle
 
 
 def build_app(cfg, engine, provider):
@@ -82,7 +120,8 @@ def build_app(cfg, engine, provider):
     async def state(_):
         if hasattr(provider, "refresh"):
             await provider.refresh()
-        s = {"provider": provider.name, "tuned_in": hub.tuned, "listeners": hub.listeners, "error": hub.error}
+        s = {"provider": provider.name, "tuned_in": hub.tuned, "listeners": hub.listeners, "error": hub.error,
+             "log": recent(15)}
         s.update(provider.state())
         return web.json_response(s)
 
@@ -133,4 +172,5 @@ def build_app(cfg, engine, provider):
         web.post("/api/control", guarded(control)), web.post("/api/music_app", guarded(set_app)),
         web.post("/api/output", guarded(set_output)), web.post("/api/quit", guarded(quit_app)),
     ])
+    app["hub"] = hub
     return app

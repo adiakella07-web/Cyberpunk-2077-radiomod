@@ -9,7 +9,7 @@
         "useCustom": false
     },
     "streamInfo": {
-        "streamURL": "http://127.0.0.1:8765/Neon_Dial_Your_Music.mp3",
+        "streamURL": "http://127.0.0.1:8766/Neon_Dial_Your_Music.mp3",
         "isStream": true
     },
     "order": []

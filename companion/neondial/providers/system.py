@@ -19,6 +19,7 @@ import time
 import psutil
 
 from ..config import DATA_DIR
+from ..log import log
 from . import Provider, ProviderError
 
 try:  # Windows only
@@ -104,7 +105,7 @@ class Capture:
             self.engine.feed_live(data)
         err = (await proc.stderr.read()).decode(errors="replace").strip()
         if err:
-            print("[capture]", err)
+            log(f"capture helper: {err}")
 
     async def stop(self):
         if self.proc and self.proc.returncode is None:
@@ -181,6 +182,7 @@ class SystemProvider(Provider):
         prev = await self._volume(0.0, pids)
         if prev:
             if self.orig is None:
+                log(f"turned the music app's own volume down (was {max(prev.values()):.2f})")
                 best = max(prev.values())
                 self.orig = best if best > 0.05 else 1.0     # 0 = leftover from a crash -> assume full
             self.vol_pids |= set(prev)
@@ -228,19 +230,25 @@ class SystemProvider(Provider):
     async def play(self):
         s = await self._session()
         self.tuned = True
+        log(f"music app: {s.source_app_user_model_id}; output mode: {self.output}; helper: {'found' if self.helper else 'MISSING'}")
         pids = set()
         if self._game_mix():
             root, pids = app_pids(exes_for(s.source_app_user_model_id))
+            log(f"app process root pid={root}, {len(pids)} process(es)")
             if root:
                 if not self.capture.running or self.capture.pid != root:
                     await self.capture.start(root)
                 self.engine.flush()
+                log("capture started" if self.capture.running else "capture helper failed to start")
                 await self._duck(pids)
             else:
                 pids = set()
         if s.get_playback_info().playback_status != Status.PLAYING:
-            await s.try_play_async()
+            ok = await s.try_play_async()
+            log(f"sent play to the music app (accepted={ok})")
             self.we_started = True
+        else:
+            log("music app was already playing")
         if pids:
             if self._monitor:
                 self._monitor.cancel()
@@ -263,7 +271,7 @@ class SystemProvider(Provider):
             silent_for = time.monotonic() - max(self.capture.last_audio, t0 + 2)
             if playing and silent_for > 6:
                 self.fallback = "Couldn't capture the music app's audio; playing through your speakers instead."
-                print("[system]", self.fallback)
+                log(self.fallback)
                 await self._restore()
                 await self.capture.stop()
                 return

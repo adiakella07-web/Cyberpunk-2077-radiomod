@@ -7,7 +7,8 @@ DATA_DIR = pathlib.Path.home() / ".neondial"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 DEFAULTS = {
-    "port": 8765,
+    "port": 8765,                 # control panel
+    "stream_port": 8766,          # audio stream for the game (Icecast-style)
     "provider": "system",         # system | demo
     "music_app": "auto",          # auto | apple | spotify | itunes ...
     "output": "game",             # game = through the game radio mix | speakers = plain playback

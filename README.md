@@ -12,7 +12,7 @@ Tune away and it pauses. No accounts, API keys or tokens.
 Control panel (prev/next, choose music app): http://127.0.0.1:8765 while the game runs.
 
 ## How it works
-- **RadioExt** registers the station and plays a local stream (`http://127.0.0.1:8765/Neon_Dial_Your_Music.mp3`) through the game's own audio engine.
+- **RadioExt** registers the station and plays a local stream (`http://127.0.0.1:8766/Neon_Dial_Your_Music.mp3`) through the game's own audio engine.
 - **NeonDial.dll**, a tiny RED4ext plugin, starts `NeonDial.exe` with the game; the exe quits (and cleans up) when the game exits.
 - **NeonDial.exe** notices when you tune in or out of the station (RadioExt opens/closes the stream) and presses play/pause on your music app through Windows' media controls.
 - **NeonDialAudio.exe** captures just that app's audio (Windows "process loopback") and feeds it into the stream, so the music plays **through the game's radio mix**: the in-game radio volume, car muffling and station switching all apply.

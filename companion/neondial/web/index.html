@@ -24,6 +24,7 @@ button.alt,select{background:#2a2a3a;color:#fff}
  <button class=alt onclick="quitApp()">Quit companion</button>
  <div style="color:#888;margin-top:8px">Pick your playlist in the music app itself. Tune in to the station in-game and it plays; tune out and it pauses.</div>
 </div>
+<div class=card style="font:12px monospace;color:#9ab"><b>Activity</b><div id=logbox>-</div></div>
 <script>
 const j=async(u,o)=>(await fetch(u,o)).json();
 const post=(u,b)=>j(u,{method:"POST",body:JSON.stringify(b)});
@@ -40,6 +41,7 @@ async function refresh(){
   if(S.output==="game"){h+="<br>Audio path: "+(S.capturing?"<b>game radio mix</b> (capturing)":(S.fallback?"speakers (fallback)":(S.helper_found?"game radio mix (starts when you tune in)":"helper missing - using speakers")))}
   if(S.fallback)h+='<br><span class=err></span>';
   const e=S.error||S.provider_error; if(e)h+='<br><br><span class=err></span>';
+  document.getElementById("logbox").innerText=(S.log||[]).join("\n")||"-";
   const el=document.getElementById("status"); el.innerHTML=h; const ee=el.querySelectorAll(".err"); const msgs=[S.fallback,e].filter(Boolean); ee.forEach((x,i)=>x.textContent=msgs[i]||"");
 }
 refresh(); setInterval(refresh,3000);
