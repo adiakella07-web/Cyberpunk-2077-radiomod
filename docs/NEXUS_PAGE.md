@@ -1,6 +1,6 @@
 # Neon Dial: Your Music as a Radio Station (Nexus page draft)
 
-**Short description:** Adds "Neon Dial FM" to the radio list and plays your open Apple Music / Spotify playlist when you tune in. No logins or API keys.
+**Short description:** Adds "Neon Dial FM" to the radio list and plays your open Apple Music / Spotify playlist through the game's radio mix. No logins or API keys.
 
 ## Description
 Open Apple Music or Spotify on your PC, load a playlist, and tune to **Neon Dial FM**, the last station in the radio list. Tune away and it pauses.
@@ -15,10 +15,10 @@ Open Apple Music or Spotify on your PC, load a playlist, and tune to **Neon Dial
 Install with Vortex, enable, deploy. Start your music app, launch the game, tune to Neon Dial FM.
 
 ## How it works
-A small helper starts with the game (via a RED4ext plugin) and presses play/pause on your music app using Windows media controls when you tune in/out.
+A helper starts with the game. When you tune in it plays your music app and routes just that app's audio into the game's radio, so radio volume, car muffling and station switching all work. Switch away and the music pauses; switch back and it resumes.
 
 ## Known issues / limits
-- Audio comes from the music app itself, not the game's radio mix (no in-game radio volume or car muffling).
+- Needs Windows 10 2004+/11 (process loopback). If capture fails it falls back to playing through your speakers.
 - Unsigned helper exe may trigger antivirus false positives; source is on GitHub.
 
 ## Permissions / credits

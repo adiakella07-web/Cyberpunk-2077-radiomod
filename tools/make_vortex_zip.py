@@ -1,14 +1,14 @@
 """Assemble the Vortex-installable zip.
-usage: python tools/make_vortex_zip.py <NeonDial.exe> <NeonDial.dll> [out.zip]"""
+usage: python tools/make_vortex_zip.py <NeonDial.exe> <NeonDial.dll> <NeonDialAudio.exe> [out.zip]"""
 import pathlib
 import sys
 import zipfile
 
 root = pathlib.Path(__file__).resolve().parent.parent
 pkg = root / "vortex_package"
-exe, dll = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-out = pathlib.Path(sys.argv[3] if len(sys.argv) > 3 else root / "NeonDial-vortex.zip")
-for f in (exe, dll):
+exe, dll, helper = (pathlib.Path(a) for a in sys.argv[1:4])
+out = pathlib.Path(sys.argv[4] if len(sys.argv) > 4 else root / "NeonDial-vortex.zip")
+for f in (exe, dll, helper):
     if not f.exists():
         sys.exit(f"missing: {f}")
 dest = "red4ext/plugins/NeonDial/"
@@ -18,4 +18,5 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(f, f.relative_to(pkg).as_posix())
     z.write(exe, dest + "NeonDial.exe")
     z.write(dll, dest + "NeonDial.dll")
+    z.write(helper, dest + "NeonDialAudio.exe")
 print("Wrote", out)

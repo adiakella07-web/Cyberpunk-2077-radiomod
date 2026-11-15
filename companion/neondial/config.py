@@ -10,7 +10,8 @@ DEFAULTS = {
     "port": 8765,
     "provider": "system",         # system | demo
     "music_app": "auto",          # auto | apple | spotify | itunes ...
-    "idle_pause_seconds": 6,
+    "output": "game",             # game = through the game radio mix | speakers = plain playback
+    "idle_pause_seconds": 1.5,
     "game_process": "Cyberpunk2077.exe",
 }
 

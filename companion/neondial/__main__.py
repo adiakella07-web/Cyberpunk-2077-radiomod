@@ -1,10 +1,11 @@
 import argparse
 import asyncio
 import os
-import subprocess
 import sys
 import threading
 import time
+
+import psutil
 
 from aiohttp import web
 
@@ -30,29 +31,33 @@ def make_provider(cfg, engine):
     return SystemProvider(cfg, engine)
 
 
-def game_running(name):
-    try:
-        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH"],
-                             capture_output=True, text=True,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
-        return name.lower() in out.lower()
-    except Exception:
-        return False
+async def watch_pid(pid, shutdown):
+    """Exit (cleanly) when the game process is gone."""
+    while psutil.pid_exists(pid):
+        await asyncio.sleep(1)
+    await shutdown()
 
 
-async def watch_game(name):
-    """Exit when the game closes (or never started), so the companion can auto-launch with it."""
+async def watch_game(name, shutdown):
     seen, start = False, time.time()
     while True:
-        if await asyncio.to_thread(game_running, name):
+        running = any((p.info["name"] or "").lower() == name.lower() for p in psutil.process_iter(["name"]))
+        if running:
             seen = True
         elif seen or time.time() - start > 300:
-            os._exit(0)
-        await asyncio.sleep(5)
+            await shutdown()
+        await asyncio.sleep(2)
 
 
-async def serve(cfg, engine, provider, ready, watch):
+async def serve(cfg, engine, provider, ready, watch, watch_pid_arg=None):
     app = build_app(cfg, engine, provider)
+
+    async def shutdown():
+        try:
+            await provider.stop()      # restores the music app's volume, stops capture
+        finally:
+            os._exit(0)
+    app["shutdown"] = shutdown
     runner = web.AppRunner(app)
     await runner.setup()
     # 127.0.0.1 only: nothing on your network can reach this.
@@ -66,7 +71,9 @@ async def serve(cfg, engine, provider, ready, watch):
     print(f"Neon Dial companion running ({provider.name}). Stream: {base}/stream.mp3  Panel: {base}/")
     ready.set()
     if watch:
-        asyncio.create_task(watch_game(cfg["game_process"]))
+        asyncio.create_task(watch_game(cfg["game_process"], shutdown))
+    if watch_pid_arg:
+        asyncio.create_task(watch_pid(watch_pid_arg, shutdown))
     try:
         await engine.run()
     finally:
@@ -79,6 +86,7 @@ def cli():
     ap = argparse.ArgumentParser(prog="NeonDial")
     ap.add_argument("--config", help="optional config.toml")
     ap.add_argument("--provider", help="override provider: apple | spotify | demo")
+    ap.add_argument("--watch-pid", type=int, help="quit cleanly when this process (the game) exits")
     ap.add_argument("--watch-game", action="store_true", help="quit automatically when the game closes")
     args = ap.parse_args()
     cfg = config_mod.load(args.config)
@@ -88,7 +96,7 @@ def cli():
     engine = AudioEngine()
     provider = make_provider(cfg, engine)
     ready = threading.Event()
-    asyncio.run(serve(cfg, engine, provider, threading.Event(), args.watch_game))
+    asyncio.run(serve(cfg, engine, provider, threading.Event(), args.watch_game, args.watch_pid))
 
 
 if __name__ == "__main__":

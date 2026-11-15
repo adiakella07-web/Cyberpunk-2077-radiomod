@@ -1,5 +1,5 @@
 // Neon Dial launcher: a tiny RED4ext plugin that starts NeonDial.exe (sitting next to this DLL)
-// when the game loads and stops it when the game unloads. So launching the game from Vortex is enough.
+// when the game loads (it stops itself when the game exits). So launching the game from Vortex is enough.
 // Only the plugin-API headers are needed (we are a loader, we don't touch game internals).
 #include <RED4ext/Common.hpp>
 #include <RED4ext/Api/ApiVersion.hpp>
@@ -33,7 +33,7 @@ std::wstring ThisDllDir()
 void StartCompanion()
 {
     const std::wstring dir = ThisDllDir();
-    std::wstring cmd = L"\"" + dir + L"\\NeonDial.exe\"";
+    std::wstring cmd = L"\"" + dir + L"\\NeonDial.exe\" --watch-pid " + std::to_wstring(GetCurrentProcessId());
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     // If a copy is already running the new one exits by itself (port already in use).
@@ -42,9 +42,10 @@ void StartCompanion()
 
 void StopCompanion()
 {
+    // NeonDial.exe watches the game's process id and shuts down cleanly by itself (it must restore the
+    // music app's volume first), so we deliberately don't kill it here.
     if (g_proc.hProcess)
     {
-        TerminateProcess(g_proc.hProcess, 0);
         CloseHandle(g_proc.hProcess);
         CloseHandle(g_proc.hThread);
         g_proc = {};

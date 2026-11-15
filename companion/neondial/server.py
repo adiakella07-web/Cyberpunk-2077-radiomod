@@ -63,6 +63,7 @@ def build_app(cfg, engine, provider):
         resp = web.StreamResponse(headers={
             "Content-Type": "audio/mpeg", "Cache-Control": "no-cache, no-store", "icy-name": "Neon Dial"})
         await resp.prepare(request)
+        await resp.write(engine.preroll)
         q = engine.add_client()
         hub.connected()
         try:
@@ -115,13 +116,21 @@ def build_app(cfg, engine, provider):
         provider.pref = app_name
         return {"ok": True}
 
+    async def set_output(request):
+        mode = (await request.json()).get("output")
+        if mode not in ("game", "speakers"):
+            raise ProviderError("output must be game or speakers")
+        config_mod.save_settings({"output": mode})
+        await provider.set_output(mode)
+        return {"ok": True}
+
     async def quit_app(_):
-        asyncio.get_running_loop().call_later(0.3, lambda: os._exit(0))
+        asyncio.create_task(app["shutdown"]())
         return {"ok": True}
 
     app.add_routes([
-        web.get("/", index), web.get("/stream.mp3", stream), web.get("/api/state", state),
+        web.get("/", index), web.get("/{name}.mp3", stream), web.get("/api/state", state),
         web.post("/api/control", guarded(control)), web.post("/api/music_app", guarded(set_app)),
-        web.post("/api/quit", guarded(quit_app)),
+        web.post("/api/output", guarded(set_output)), web.post("/api/quit", guarded(quit_app)),
     ])
     return app
