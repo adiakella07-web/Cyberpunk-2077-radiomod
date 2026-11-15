@@ -12,16 +12,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - name: Build companion exe
-        working-directory: companion
-        run: |
-          python -m pip install -r requirements.txt pyinstaller
-          python -m PyInstaller --noconfirm --onefile --windowed --name NeonDial --add-data "neondial/web;neondial/web" --collect-submodules winrt run.py
-      - name: Build RED4ext launcher plugin
+      - name: Build RED4ext launcher plugin + audio helper
         run: |
           git clone --depth 1 https://github.com/WopsS/RED4ext.SDK launcher/RED4ext.SDK
           cmake -S launcher -B launcher/build -A x64
           cmake --build launcher/build --config Release
+      - name: Build companion exe
+        working-directory: companion
+        run: |
+          python -m pip install -r requirements.txt pyinstaller
+          python -m PyInstaller --noconfirm --onefile --windowed --name NeonDial --add-data "neondial/web;neondial/web" run.py
+      - name: Self-test the packaged app
+        shell: pwsh
+        env:
+          NEONDIAL_AUDIO_HELPER: ${{ github.workspace }}\launcher\build\Release\NeonDialAudio.exe
+        run: |
+          Start-Process -FilePath companion\dist\NeonDial.exe -ArgumentList "--selftest","selftest.txt" -Wait
+          if (-not (Test-Path selftest.txt)) { Write-Output "::error::selftest produced no report (exe crashed at startup)"; exit 1 }
+          $t = (Get-Content selftest.txt) -join " | "
+          if ($t -match "SELFTEST OK") { Write-Output "::notice::$t" } else { Write-Output "::error::$t"; exit 1 }
       - name: Package for Vortex
         run: python tools/make_vortex_zip.py companion/dist/NeonDial.exe launcher/build/Release/NeonDial.dll launcher/build/Release/NeonDialAudio.exe NeonDial-vortex.zip
       - uses: actions/upload-artifact@v4
