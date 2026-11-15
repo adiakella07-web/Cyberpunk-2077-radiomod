@@ -2,7 +2,8 @@
 
 Neon Dial runs a small Spotify Connect receiver (librespot) that shows up in Spotify as the device
 "Neon Dial FM", like a smart speaker. Its audio goes straight into the game's radio stream, so it plays
-through the game's radio mix. Needs Spotify Premium; log in once in the browser window that opens.
+through the game's radio mix. Needs Spotify Premium. The first time you pick the device in a Spotify app on the same network it logs itself in
+(no browser or password entry here).
 
 Start something on it once from any Spotify app (phone is fine): Devices -> "Neon Dial FM". After that you can
 close Spotify. Tuning out of the station stalls librespot's output (so the music holds its place) and tuning
@@ -40,8 +41,10 @@ class StandaloneProvider(Provider):
         self.engine = engine
         self.device_name = "Neon Dial FM"
         self.exe = librespot_path()
+        self.login = (cfg.get("spotify_login") or "zeroconf").lower()   # zeroconf = pick the device in Spotify, no browser
         self.tuned = False
-        self.status = "starting" if self.exe else "librespot.exe not found next to NeonDial.exe"
+        self.status = ("waiting: in the Spotify app (same Wi-Fi) pick the device \"Neon Dial FM\"; the first pick also logs it in"
+                       if self.exe else "librespot.exe not found next to NeonDial.exe")
         self.proc = None
         self._task = None
         self._opened = False
@@ -72,8 +75,10 @@ class StandaloneProvider(Provider):
         cache = DATA_DIR / "librespot"
         cache.mkdir(parents=True, exist_ok=True)
         cmd = [str(self.exe), "--name", self.device_name, "--backend", "pipe", "--format", "S16",
-               "--bitrate", "320", "--cache", str(cache), "--disable-audio-cache", "--enable-oauth",
+               "--bitrate", "320", "--cache", str(cache), "--disable-audio-cache",
                "--initial-volume", "100", "--device-type", "speaker"]
+        if self.login == "oauth":                       # optional: log in through a browser window instead
+            cmd.append("--enable-oauth")
         while True:
             self.proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)

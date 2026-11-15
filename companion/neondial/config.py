@@ -11,8 +11,10 @@ DEFAULTS = {
     "stream_port": 8766,          # audio stream for the game (Icecast-style)
     "provider": "system",         # system | demo
     "music_app": "auto",          # auto | apple | spotify | itunes ...
+    "spotify_login": "zeroconf",  # zeroconf (pick the device in Spotify) | oauth (browser window)
+    "texture": "off",             # off | radio | lofi | warm
     "output": "game",             # game = through the game radio mix | speakers = plain playback
-    "idle_pause_seconds": 1.5,
+    "idle_pause_seconds": 0.4,
     "game_process": "Cyberpunk2077.exe",
 }
 

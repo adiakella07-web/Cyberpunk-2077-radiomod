@@ -120,7 +120,7 @@ def build_app(cfg, engine, provider):
     async def state(_):
         if hasattr(hub.provider, "refresh"):
             await hub.provider.refresh()
-        s = {"provider": hub.provider.name, "tuned_in": hub.tuned, "listeners": hub.listeners, "error": hub.error,
+        s = {"texture": engine.texture.mode, "provider": hub.provider.name, "tuned_in": hub.tuned, "listeners": hub.listeners, "error": hub.error,
              "log": recent(15)}
         s.update(hub.provider.state())
         return web.json_response(s)
@@ -175,6 +175,36 @@ def build_app(cfg, engine, provider):
         hub.provider.show_window(bool((await request.json()).get("show")))
         return {"ok": True}
 
+    async def do(key, val):
+        """Single entry point for commands coming from the in-game overlay."""
+        try:
+            if key == "mode":
+                config_mod.save_settings({"provider": val})
+                await app["switch"](val)
+            elif key == "action":
+                if val == "next":
+                    await hub.provider.next()
+                elif val == "prev":
+                    await hub.provider.prev()
+            elif key == "window":
+                hub.provider.show_window(val == "show")
+            elif key == "texture":
+                engine.texture.set_mode(val)
+                config_mod.save_settings({"texture": val})
+            elif key == "output":
+                config_mod.save_settings({"output": val})
+                await hub.provider.set_output(val)
+        except ProviderError as e:
+            log(f"{key}: {e}")
+        except Exception as e:
+            log(f"{key}: {type(e).__name__}: {e}")
+    app["do"] = do
+
+    async def set_texture(request):
+        mode = (await request.json()).get("texture", "off")
+        await do("texture", mode)
+        return {"ok": True}
+
     async def quit_app(_):
         asyncio.create_task(app["shutdown"]())
         return {"ok": True}
@@ -182,7 +212,7 @@ def build_app(cfg, engine, provider):
     app.add_routes([
         web.get("/", index), web.get("/{name}.mp3", stream), web.get("/api/state", state),
         web.post("/api/control", guarded(control)), web.post("/api/music_app", guarded(set_app)),
-        web.post("/api/output", guarded(set_output)), web.post("/api/mode", guarded(set_mode)), web.post("/api/window", guarded(window)), web.post("/api/quit", guarded(quit_app)),
+        web.post("/api/output", guarded(set_output)), web.post("/api/mode", guarded(set_mode)), web.post("/api/texture", guarded(set_texture)), web.post("/api/window", guarded(window)), web.post("/api/quit", guarded(quit_app)),
     ])
     app["hub"] = hub
     return app

@@ -17,7 +17,14 @@ jobs:
           git clone --depth 1 https://github.com/WopsS/RED4ext.SDK launcher/RED4ext.SDK
           cmake -S launcher -B launcher/build -A x64
           cmake --build launcher/build --config Release
+      - name: Cache librespot build
+        id: ls-cache
+        uses: actions/cache@v4
+        with:
+          path: librespot-src/target/release/librespot.exe
+          key: librespot-win-v1
       - name: Build librespot (Spotify Connect receiver for standalone mode)
+        if: steps.ls-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         timeout-minutes: 30
         run: |

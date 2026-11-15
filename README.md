@@ -24,18 +24,25 @@ Control panel (prev/next, choose music app): http://127.0.0.1:8765 while the gam
 
 **Standalone Spotify mode**: no music app needs to be open. Neon Dial runs its own Spotify Connect receiver
 (librespot) that shows up in Spotify as the device **"Neon Dial FM"**. Needs Spotify Premium.
-1. Switch Mode to *Standalone Spotify* in the control panel; log in to Spotify in the browser window that opens (once).
-2. In any Spotify app (your phone is fine) choose the device **Neon Dial FM** and start a playlist; you can then close Spotify.
+1. Switch Mode to *Standalone Spotify* in the in-game panel.
+2. In any Spotify app on the same Wi-Fi (your phone is fine) choose the device **Neon Dial FM** and start a playlist. The first pick logs it in by itself, with no browser and no password; you can then close Spotify.
 3. Tune to the station in-game: the music plays through the game's radio mix; tune away and it holds its place.
 **Standalone Apple Music mode**: no Apple Music app needed. Neon Dial hosts the normal Apple Music website (music.apple.com) in a
 built-in browser window (Microsoft Edge WebView2, already on Windows 11 and most Windows 10).
-1. Switch Mode to *Standalone Apple Music*. A window opens: sign in with your Apple ID and start a playlist, then click **Hide window**.
+1. Switch Mode to *Standalone Apple Music* in the in-game panel. A small window opens (alt-tab to it if you play fullscreen): sign in with your Apple ID once and start a playlist, then click **Hide window**. It stays hidden from then on.
 2. Tune to the station: the page plays, its audio is captured from Neon Dial's own browser processes and goes through the game's radio mix. Tune away: it pauses and keeps its place.
 No developer account or tokens, it is just you logged in on the website. (Apple's DRM allows playback only in approved players such as its website, so this is the only app-free route.)
 
-## Controls
-Everything is the normal in-game radio: station wheel/next/previous (switching away pauses, switching back resumes), radio on/off, the radio volume slider.
-Prev/next track and app choice are in the control panel; in standalone mode use your Spotify app for those.
+## Controls and the in-game panel
+No web page needed: open the **Cyber Engine Tweaks overlay** (its usual hotkey, default ~) and use the **Neon Dial** window: switch mode,
+prev/next, show the Apple sign-in window (first time only), pick a sound texture, and tune the radio physics. Hotkeys for next/previous
+track can be bound in CET's bindings. Everything else is the normal in-game radio: station wheel, radio on/off, volume.
+(The old control page at http://127.0.0.1:8765 still exists as an optional extra.)
+
+## Radio physics and texture
+- **Radio boxes**: the *Radioport volume* setting now applies to boxes (RadioExt ignores it), volume falls off with distance
+  (full volume within ~4 m, silent beyond ~45 m, adjustable), and it is quieter inside a car. If the car (or pocket radio) already plays Neon Dial FM, the box is muted so the same station never plays twice with an echo.
+- **Texture**: *Radio* (band-limited with light hiss and crackle), *Lo-fi*, or *Warm tape*, applied to the stream itself.
 
 ## Limits
 - Windows 10 (2004+) / 11 only.

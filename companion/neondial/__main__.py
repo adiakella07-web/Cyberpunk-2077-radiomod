@@ -14,6 +14,7 @@ from aiohttp import web
 from . import config as config_mod
 from .audio import AudioEngine
 from .log import log
+from . import bridge
 from .server import build_app, make_stream_handler
 
 
@@ -104,6 +105,10 @@ async def serve(cfg, engine, provider, ready, watch, watch_pid_arg=None):
         print("Port in use - another Neon Dial companion is probably already running.")
         return
     await asyncio.start_server(make_stream_handler(engine, app["hub"]), "127.0.0.1", cfg["stream_port"])
+    engine.texture.set_mode(cfg.get("texture", "off"))
+    mod_dir = bridge.find_mod_dir()
+    if mod_dir:
+        asyncio.create_task(bridge.run(app, engine, mod_dir))
     await provider.start()
     base = f"http://127.0.0.1:{cfg['port']}"
     print(f"Neon Dial companion running ({provider.name}). Stream: http://127.0.0.1:{cfg['stream_port']}/Neon_Dial_Your_Music.mp3  Panel: {base}/")
@@ -143,6 +148,10 @@ def selftest(path):
         from .providers.standalone import StandaloneProvider, librespot_path
         StandaloneProvider({}, AudioEngine())
         log_(f"standalone provider ok; librespot present: {librespot_path()}")
+        from .dsp import Texture
+        tx = Texture()
+        tx.set_mode("radio")
+        log_(f"texture dsp ok: {len(tx.process(bytes(17640)))} bytes")
 
         async def go():
             cfg = config_mod.load()
