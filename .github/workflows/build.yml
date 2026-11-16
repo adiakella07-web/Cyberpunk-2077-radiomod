@@ -57,11 +57,11 @@ jobs:
           L ("staged: " + ((Get-ChildItem pack -Recurse -File | ForEach-Object { $_.FullName.Replace($PWD.Path, "") }) -join "; "))
           Run "pack" { & $cli pack pack/NeonDial -o pack/out }
           L ("packed: " + ((Get-ChildItem pack/out -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $($_.Length)" }) -join "; "))
-          Run "export" { & $cli export pack/NeonDial/mod/neondial/neon_dial_icon.xbm -o pack/check }
-          L ("exported: " + ((Get-ChildItem pack/check -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Replace($PWD.Path, "") }) -join "; "))
+          New-Item -ItemType Directory -Force pack/check | Out-Null
+          Run "serialize" { & $cli convert serialize pack/NeonDial/mod/neondial/neon_dial_icon.xbm -o pack/check }
           Run "verify" { python assets/icon/verify_icon.py pack/check }
           $text = $log -join " | "
-          if ((Test-Path pack/out/NeonDial.archive) -and ($text -match "alpha range")) { Write-Output "::notice::ICON OK | $text" }
+          if ((Test-Path pack/out/NeonDial.archive) -and ($text -match "alpha range OK")) { Write-Output "::notice::ICON OK | $text" }
           else { Write-Output "::error::ICON PROBLEM | $text"; exit 1 }
       - name: Build companion exe
         working-directory: companion

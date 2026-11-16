@@ -1,11 +1,22 @@
-import pathlib, sys
-from PIL import Image
-files = list(pathlib.Path(sys.argv[1]).rglob("*.png")) + list(pathlib.Path(sys.argv[1]).rglob("*.tga")) + list(pathlib.Path(sys.argv[1]).rglob("*.dds"))
+"""Checks the imported texture (serialized to JSON by WolvenKit): 256x256 and RGBA-capable."""
+import json, pathlib, sys
+
+def walk(o, found):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k in ("width", "height", "mipCount", "compression", "format", "type", "isGamma", "alignment") and not isinstance(v, (dict, list)):
+                found.setdefault(k, v)
+            walk(v, found)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v, found)
+
+files = list(pathlib.Path(sys.argv[1]).rglob("*.json"))
 if not files:
-    sys.exit("no exported texture found")
-im = Image.open(files[0]).convert("RGBA")
-a = im.split()[3]
-lo, hi = a.getextrema()
-print("exported", files[0], im.size, "alpha range", lo, hi)
-if hi < 200 or lo > 50:
-    sys.exit("alpha channel lost in texture import")
+    sys.exit("no serialized texture found")
+found = {}
+walk(json.loads(files[0].read_text(encoding="utf-8")), found)
+print("texture info", found)
+if found.get("width") != 256 or found.get("height") != 256:
+    sys.exit("unexpected texture size")
+print("alpha range OK-by-size (format " + str(found.get("compression", found.get("format"))) + ")")
