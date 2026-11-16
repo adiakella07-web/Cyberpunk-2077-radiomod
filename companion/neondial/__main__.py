@@ -100,11 +100,12 @@ async def serve(cfg, engine, provider, ready, watch, watch_pid_arg=None):
     await runner.setup()
     # 127.0.0.1 only: nothing on your network can reach this.
     try:
-        await web.TCPSite(runner, "127.0.0.1", cfg["port"]).start()
+        if cfg.get("web_panel"):                      # optional browser page, off by default
+            await web.TCPSite(runner, "127.0.0.1", cfg["port"]).start()
+        await asyncio.start_server(make_stream_handler(engine, app["hub"]), "127.0.0.1", cfg["stream_port"])
     except OSError:
         print("Port in use - another Neon Dial companion is probably already running.")
         return
-    await asyncio.start_server(make_stream_handler(engine, app["hub"]), "127.0.0.1", cfg["stream_port"])
     engine.texture.set_mode(cfg.get("texture", "off"))
     mod_dir = bridge.find_mod_dir()
     if mod_dir:
@@ -155,7 +156,7 @@ def selftest(path):
 
         async def go():
             cfg = config_mod.load()
-            cfg["port"], cfg["provider"], cfg["stream_port"] = 8799, "system", 8798
+            cfg["port"], cfg["provider"], cfg["stream_port"], cfg["web_panel"] = 8799, "system", 8798, True
             engine = AudioEngine()
             provider = make_provider(cfg, engine)
             task = asyncio.create_task(serve(cfg, engine, provider, threading.Event(), False))
@@ -221,6 +222,7 @@ def cli():
     args = ap.parse_args()
     if args.selftest:
         selftest(args.selftest)
+    config_mod.finish_pending_wipe()
     cfg = config_mod.load(args.config)
     if args.provider:
         cfg["provider"] = args.provider

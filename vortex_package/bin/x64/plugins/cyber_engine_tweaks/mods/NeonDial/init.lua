@@ -126,6 +126,63 @@ local function updateVolumes()
     end
 end
 
+---------------------------------------------------------------- now playing in the game's radio UI
+-- RadioExt shows the stream address as the "track name". After it has drawn that text we replace it with the real song
+-- (Artist - Title), both in the radio select screen and in the pop-up when switching stations.
+local pending = { popup = nil, notif = nil }
+local popupCtrl = nil
+local shownText = nil
+
+local function nowText()
+    local t = ui.status.title or ""
+    if t == "" then return nil end
+    local a = ui.status.artist or ""
+    if a ~= "" then return a .. " - " .. t end
+    return t
+end
+
+local function stationIsOurs()
+    local rx = radioExt()
+    local mv = rx and rx.radioManager and rx.radioManager.managerV
+    if not mv or not mv.getActiveStationData then return false end
+    local active = mv:getActiveStationData()
+    return active ~= nil and active.station == STATION
+end
+
+local function applyPopup(ctrl, text)
+    if not ctrl or not text then return false end
+    local ok = pcall(function()
+        ctrl.trackName:SetText(text)
+        ctrl.trackName:SetVisible(true)
+    end)
+    return ok
+end
+
+local function applyNotif(ctrl, text)
+    if not ctrl or not text then return end
+    pcall(function() inkTextRef.SetText(ctrl.subText, text) end)
+end
+
+local function updateNowPlaying()
+    local text = nowText()
+    if pending.popup or pending.notif then
+        if stationIsOurs() and text then
+            if pending.popup then
+                popupCtrl = pending.popup
+                applyPopup(popupCtrl, text)
+            end
+            if pending.notif then applyNotif(pending.notif, text) end
+            shownText = text
+        end
+        pending.popup, pending.notif = nil, nil
+        return
+    end
+    -- song changed while the select screen is open
+    if popupCtrl and text and text ~= shownText and stationIsOurs() then
+        if applyPopup(popupCtrl, text) then shownText = text else popupCtrl = nil end
+    end
+end
+
 ---------------------------------------------------------------- UI
 local function combo(label, items, labels, current)
     local idx = 0
@@ -164,6 +221,16 @@ local function draw()
         local tex, tch = combo("##nd_tex", TEXTURES, TEXTURE_LABELS, s.texture or "off")
         if tch then send("texture=" .. tex) end
     end
+    if ui.connected then
+        ImGui.Separator()
+        if ui.confirmForget then
+            if ImGui.Button("Yes, sign out and erase saved logins") then send("forget=all"); ui.confirmForget = false end
+            ImGui.SameLine()
+            if ImGui.Button("Cancel") then ui.confirmForget = false end
+        else
+            if ImGui.Button("Sign out and erase saved logins") then ui.confirmForget = true end
+        end
+    end
     ImGui.Separator()
     ImGui.Text("Radio physics")
     local v, changed = ImGui.Checkbox("Distance fall-off and in-car muffling for radio boxes", cfg.physics)
@@ -191,6 +258,11 @@ end
 ---------------------------------------------------------------- events
 registerForEvent("onInit", function()
     loadSettings()
+    pcall(function()
+        ObserveAfter("VehicleRadioPopupGameController", "SetTrackName", function(this) pending.popup = this end)
+        ObserveAfter("VehicleSummonWidgetGameController", "TryShowVehicleRadioNotification", function(this) pending.notif = this end)
+        ObserveAfter("VehicleRadioPopupGameController", "OnUninitialize", function() popupCtrl = nil; shownText = nil end)
+    end)
     print("[NeonDial] ready. Open the CET overlay to control it; station: " .. STATION)
 end)
 
@@ -202,6 +274,7 @@ registerForEvent("onUpdate", function(dt)
     if ui.tick < 0.1 then return end
     ui.tick = 0
     pcall(updateVolumes)
+    pcall(updateNowPlaying)
     ui.lastRead = ui.lastRead + 1
     if ui.lastRead >= 10 then ui.lastRead = 0; pcall(readStatus) end
 end)

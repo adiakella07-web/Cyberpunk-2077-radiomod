@@ -30,6 +30,30 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/librespot-org/librespot librespot-src
           cargo build --release --manifest-path librespot-src/Cargo.toml --no-default-features --features "native-tls with-libmdns"
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "10.0.x" }
+      - name: Build custom station icon (texture + archive)
+        id: icon
+        continue-on-error: true
+        shell: pwsh
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          python -m pip install pillow
+          python assets/icon/make_icon.py assets/icon/raw/mod/neondial/neon_dial_icon.png
+          gh release download 9.1.1 -R WolvenKit/WolvenKit -p "WolvenKit.Console-9.1.1.zip" -D wk
+          Expand-Archive wk/WolvenKit.Console-9.1.1.zip wk/cli
+          $cli = (Get-ChildItem wk/cli -Filter WolvenKit.CLI.exe -Recurse | Select-Object -First 1).FullName
+          Write-Output "cli: $cli"
+          New-Item -ItemType Directory -Force pack/NeonDial/mod/neondial | Out-Null
+          & $cli import assets/icon/raw -o pack/NeonDial
+          Copy-Item assets/icon/neon_dial_icons.inkatlas pack/NeonDial/mod/neondial/
+          Get-ChildItem pack -Recurse -File | ForEach-Object { Write-Output $_.FullName }
+          & $cli pack pack/NeonDial -o pack/out
+          Get-ChildItem pack/out -Recurse -File | ForEach-Object { Write-Output $_.FullName }
+          if (-not (Test-Path pack/out/NeonDial.archive)) { throw "archive not produced" }
+          # verify the texture round-trips with its alpha channel
+          & $cli export pack/NeonDial/mod/neondial/neon_dial_icon.xbm -o pack/check
+          python assets/icon/verify_icon.py pack/check
       - name: Build companion exe
         working-directory: companion
         run: |
@@ -46,7 +70,7 @@ jobs:
           $t = (Get-Content selftest.txt) -join " | "
           if ($t -match "SELFTEST OK") { Write-Output "::notice::$t" } else { Write-Output "::error::$t"; exit 1 }
       - name: Package for Vortex
-        run: python tools/make_vortex_zip.py companion/dist/NeonDial.exe launcher/build/Release/NeonDial.dll launcher/build/Release/NeonDialAudio.exe NeonDial-vortex.zip librespot-src/target/release/librespot.exe
+        run: python tools/make_vortex_zip.py companion/dist/NeonDial.exe launcher/build/Release/NeonDial.dll launcher/build/Release/NeonDialAudio.exe NeonDial-vortex.zip librespot-src/target/release/librespot.exe pack/out/NeonDial.archive
       - uses: actions/upload-artifact@v4
         with: { name: NeonDial-vortex, path: NeonDial-vortex.zip }
       - name: Publish release

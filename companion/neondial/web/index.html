@@ -34,7 +34,7 @@ button.alt,select{background:#2a2a3a;color:#fff}
 <div class=card style="font:12px monospace;color:#9ab"><b>Activity</b><div id=logbox>-</div></div>
 <script>
 const j=async(u,o)=>(await fetch(u,o)).json();
-const post=(u,b)=>j(u,{method:"POST",body:JSON.stringify(b)});
+const post=(u,b)=>j(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
 async function ctl(a){const r=await post("/api/control",{action:a});if(r.error)alert(r.error)}
 async function setApp(){await post("/api/music_app",{music_app:document.getElementById("app").value})}
 async function setOut(){await post("/api/output",{output:document.getElementById("out").value})}

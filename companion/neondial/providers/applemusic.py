@@ -19,6 +19,9 @@ from . import ProviderError
 from .system import SystemProvider
 
 SITE = "https://music.apple.com/"
+# The embedded browser may only be on Apple's own sites (sign-in, the player, its CDNs). If anything sends it elsewhere,
+# it is taken straight back, so a stray redirect can never show you a look-alike login page inside Neon Dial.
+ALLOWED_SUFFIXES = ("apple.com", "icloud.com", "mzstatic.com", "cdn-apple.com", "apple-musickit.com", "applemusic.com")
 HIDDEN_FLAG = DATA_DIR / "apple_window_hidden"
 JS_STATUS = ("(function(){try{var m=MusicKit.getInstance();var i=m.nowPlayingItem;"
              "return JSON.stringify({ok:true,playing:!!m.isPlaying,title:i?i.title:'',artist:i?(i.artistName||''):'',"
@@ -41,7 +44,36 @@ class AppleWebProvider(SystemProvider):
         asyncio.create_task(self._open())
 
     async def stop(self):
+        if getattr(self, "_guard", None):
+            self._guard.cancel()
         await super().stop()
+
+    async def _watch_navigation(self):
+        from urllib.parse import urlparse
+        while True:
+            await asyncio.sleep(2)
+            try:
+                url = await asyncio.to_thread(self.win.get_current_url)
+            except Exception:
+                continue
+            if not url or url.startswith(("about:", "data:")):
+                continue
+            host = (urlparse(url).hostname or "").lower()
+            if not any(host == d or host.endswith("." + d) for d in ALLOWED_SUFFIXES):
+                log("the Apple Music window left Apple's sites; taking it back")
+                try:
+                    await asyncio.to_thread(self.win.load_url, SITE)
+                except Exception:
+                    pass
+
+    async def forget(self):
+        self.status = "signed out: open the Apple sign-in window to log in again"
+        if self.win:
+            try:
+                await asyncio.to_thread(self.win.clear_cookies)
+                await asyncio.to_thread(self.win.load_url, SITE)
+            except Exception as e:
+                log(f"clearing the browser session: {type(e).__name__}")
 
     async def _open(self):
         if not await asyncio.to_thread(self.gui["ready"].wait, 40):
@@ -57,6 +89,7 @@ class AppleWebProvider(SystemProvider):
             HIDDEN_FLAG.write_text("1")
             return False
         self.win.events.closing += on_closing
+        self._guard = asyncio.create_task(self._watch_navigation())
         self.status = ("sign in to Apple Music in the window, start a playlist, then click Hide window"
                        if show else "ready (window hidden): tune in to play")
         log("Apple Music window " + ("shown for sign-in" if show else "created hidden"))

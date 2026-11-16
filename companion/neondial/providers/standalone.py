@@ -23,6 +23,7 @@ from . import Provider
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 URL = re.compile(r"https://accounts\.spotify\.com\S+")
+TITLE = re.compile(r"Loading <(.+?)> with Spotify URI")
 KEEP = ("authenticated", "logged in", "browse", "oauth", "device", "loading", "error", "warn", "panic", "listening", "country")
 
 
@@ -43,6 +44,8 @@ class StandaloneProvider(Provider):
         self.exe = librespot_path()
         self.login = (cfg.get("spotify_login") or "zeroconf").lower()   # zeroconf = pick the device in Spotify, no browser
         self.tuned = False
+        self.title = ""
+        self._wiping = False
         self.status = ("waiting: in the Spotify app (same Wi-Fi) pick the device \"Neon Dial FM\"; the first pick also logs it in"
                        if self.exe else "librespot.exe not found next to NeonDial.exe")
         self.proc = None
@@ -77,6 +80,8 @@ class StandaloneProvider(Provider):
         cmd = [str(self.exe), "--name", self.device_name, "--backend", "pipe", "--format", "S16",
                "--bitrate", "320", "--cache", str(cache), "--disable-audio-cache",
                "--initial-volume", "100", "--device-type", "speaker"]
+        if (cache / "credentials.json").exists():       # already paired: stop advertising on the network
+            cmd.append("--disable-discovery")
         if self.login == "oauth":                       # optional: log in through a browser window instead
             cmd.append("--enable-oauth")
         while True:
@@ -103,6 +108,9 @@ class StandaloneProvider(Provider):
                 return
             text = line.decode(errors="replace").strip()
             low = text.lower()
+            m_title = TITLE.search(text)
+            if m_title:
+                self.title = m_title.group(1)
             m = URL.search(text)
             if m and not self._opened:
                 self._opened = True
@@ -113,6 +121,17 @@ class StandaloneProvider(Provider):
             if any(k in low for k in KEEP):
                 log("spotify: " + text[:160])
 
+    async def forget(self):
+        """Sign out: stop the receiver (it restarts with no saved login and advertises itself again)."""
+        self.title = ""
+        self.status = "signed out: pick the device \"Neon Dial FM\" in a Spotify app to log in again"
+        if self.proc and self.proc.returncode is None:
+            try:
+                self.proc.terminate()
+            except ProcessLookupError:
+                pass
+        await asyncio.sleep(0.5)
+
     def state(self):
         return {"standalone_status": self.status, "librespot_found": self.exe is not None,
-                "now": {"title": "", "artist": "", "playing": self.tuned}}
+                "now": {"title": self.title, "artist": "", "playing": self.tuned}}

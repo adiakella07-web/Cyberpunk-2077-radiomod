@@ -11,6 +11,7 @@ down silences the capture) we put the volume back and play through the speakers.
 """
 import array
 import asyncio
+import collections
 import json
 import os
 import pathlib
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import time
 
+import numpy as np
 import psutil
 
 from ..config import DATA_DIR
@@ -100,6 +102,13 @@ class Capture:
         self.key = None
         self.last_audio = 0.0
         self.max_peak = 0
+        self.gain = 1.0
+        self._rem = b""
+        self._peaks = collections.deque(maxlen=600)
+
+    def recent_peak(self, seconds):
+        cutoff = time.monotonic() - seconds
+        return max((p for t, p in self._peaks if t >= cutoff), default=0)
 
     @property
     def running(self):
@@ -111,6 +120,7 @@ class Capture:
             str(self.helper), "capture", str(pid), mode,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
         self.key, self.last_audio, self.max_peak = (pid, mode), 0.0, 0
+        self._rem, self._peaks = b"", collections.deque(maxlen=600)
         self.task = asyncio.create_task(self._read(self.proc))
 
     async def _read(self, proc):
@@ -118,14 +128,21 @@ class Capture:
             data = await proc.stdout.read(8192)
             if not data:
                 break
+            data = self._rem + data
             n = len(data) // 4 * 4
-            if n and data.count(0) != len(data):
-                a = array.array("h")
-                a.frombytes(data[:n])
-                peak = max(max(a), -min(a))
+            data, self._rem = data[:n], data[n:]
+            if not n:
+                continue
+            if data.count(0) != n:
+                a = np.frombuffer(data, dtype="<i2")
+                peak = int(max(a.max(), -int(a.min())))
                 if peak > 0:
-                    self.last_audio = time.monotonic()
+                    now = time.monotonic()
+                    self.last_audio = now
                     self.max_peak = max(self.max_peak, peak)
+                    self._peaks.append((now, peak))
+                if self.gain != 1.0:
+                    data = np.clip(a.astype(np.float32) * self.gain, -32768, 32767).astype("<i2").tobytes()
             self.engine.feed_live(data)
         err = (await proc.stderr.read()).decode(errors="replace").strip()
         if err:
@@ -159,6 +176,8 @@ class SystemProvider(Provider):
         self.fallback = None
         self.fail_streak = 0
         self.good = None                                  # label of the capture strategy that worked last
+        self.duck_vol = 0.0                               # how far the app's own volume is turned down (learned)
+        self.learned = False
         self.strategy = None
         self.orig = None
         self.vol_pids = set()
@@ -251,8 +270,8 @@ class SystemProvider(Provider):
                 pass
         return res
 
-    async def _duck(self, pids):
-        prev = await self._volume(0.0, pids)
+    async def _duck(self, pids, vol=None):
+        prev = await self._volume(self.duck_vol if vol is None else vol, pids)
         if prev:
             if self.orig is None:
                 best = max(prev.values())
@@ -264,8 +283,10 @@ class SystemProvider(Provider):
 
     async def _restore(self):
         if self.orig is not None:
-            await self._volume(self.orig, set(self.vol_pids))
-            log("restored the music app's volume")
+            got = await self._volume(self.orig, set(self.vol_pids))
+            log(f"restored the music app's volume ({len(got)} session(s))")
+            if not got:
+                got = await self._volume(self.orig, set(self.vol_pids) | set(app_pids(exes_for((self.now or {}).get("app", "")))[1]))
         self.orig, self.vol_pids = None, set()
         try:
             STATE_FILE.unlink()
@@ -374,21 +395,38 @@ class SystemProvider(Provider):
             await self._give_up("Couldn't capture the music app's audio (or it never started); playing through your speakers.")
             return
         cur, duck_pids = success
-        log(f"capture works via '{cur[0]}' (peak {self.capture.max_peak})")
-        await self._duck(duck_pids)
-        t_duck = time.monotonic()
-        await asyncio.sleep(2.0)
-        if self.capture.last_audio < t_duck:
-            await self._give_up("Turning the music app down also silences the capture, so it would play twice; using your speakers.")
+        pre_peak = self.capture.recent_peak(1.5)
+        log(f"capture works via '{cur[0]}' (level {pre_peak})")
+        if not await self._settle(duck_pids, pre_peak):
             return
-        self.good, self.strategy, self.fail_streak = cur[0], cur[0], 0
-        log("game radio mix active")
+        self.good, self.strategy, self.fail_streak, self.learned = cur[0], cur[0], 0, True
+        log("game radio mix active" + (f" (boost x{self.capture.gain:.0f})" if self.capture.gain != 1.0 else ""))
         while self.tuned:                                  # keep it ducked / capture alive
             await asyncio.sleep(2.5)
             if not self.capture.running:
                 await self.capture.start(cur[1], cur[2])
             cands, duck_pids, _, _ = await self._candidates(exes)
             await self._duck(duck_pids)
+
+    async def _settle(self, duck_pids, pre_peak):
+        """Silence the app's own speakers without silencing the capture. Windows may apply the app's volume before
+        or after capture, so find out: try fully off first; if the capture dies, keep a low floor and boost."""
+        self.capture.gain = 1.0
+        for vol in ([self.duck_vol] if self.learned else [0.0, 0.04]):
+            t0 = time.monotonic()
+            await self._duck(duck_pids, vol)
+            await asyncio.sleep(1.3)
+            alive = self.capture.last_audio > t0 + 0.2
+            peak = self.capture.recent_peak(1.0)
+            if alive and (vol == 0.0 or peak > 25):
+                self.duck_vol = vol
+                if vol > 0.0:
+                    self.capture.gain = min(40.0, max(1.0, (self.orig or 1.0) / vol))
+                    log(f"volume {vol:.2f} keeps the capture alive (level {peak}); boosting x{self.capture.gain:.0f}")
+                return True
+            log(f"with the app volume at {vol:.2f} the capture level is {peak}")
+        await self._give_up("Turning the music app down also silences the capture, so it would play twice; using your speakers.")
+        return False
 
     async def _give_up(self, why):
         self.fallback = why

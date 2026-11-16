@@ -7,16 +7,44 @@ DATA_DIR = pathlib.Path.home() / ".neondial"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 DEFAULTS = {
-    "port": 8765,                 # control panel
+    "web_panel": False,           # optional browser control page (the in-game panel is the default)
+    "port": 8765,                 # control panel (only if web_panel is on)
     "stream_port": 8766,          # audio stream for the game (Icecast-style)
     "provider": "system",         # system | demo
     "music_app": "auto",          # auto | apple | spotify | itunes ...
     "spotify_login": "zeroconf",  # zeroconf (pick the device in Spotify) | oauth (browser window)
     "texture": "off",             # off | radio | lofi | warm
     "output": "game",             # game = through the game radio mix | speakers = plain playback
-    "idle_pause_seconds": 0.4,
+    "idle_pause_seconds": 1.0,
     "game_process": "Cyberpunk2077.exe",
 }
+
+
+def wipe_credentials():
+    """Sign out of everything Neon Dial may have stored: the Spotify receiver's login cache and the embedded browser profile."""
+    import shutil
+    for d in (DATA_DIR / "librespot", DATA_DIR / "webview"):
+        shutil.rmtree(d, ignore_errors=True)
+    for f in (DATA_DIR / "apple_window_hidden", DATA_DIR / "volume_state.json"):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    try:
+        (DATA_DIR / "wipe_on_start").write_text("1")        # the browser profile may still be locked: finish next start
+    except OSError:
+        pass
+
+
+def finish_pending_wipe():
+    import shutil
+    marker = DATA_DIR / "wipe_on_start"
+    if marker.exists():
+        shutil.rmtree(DATA_DIR / "webview", ignore_errors=True)
+        try:
+            marker.unlink()
+        except OSError:
+            pass
 
 
 def _merge(base, over):

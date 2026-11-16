@@ -37,7 +37,15 @@ No developer account or tokens, it is just you logged in on the website. (Apple'
 No web page needed: open the **Cyber Engine Tweaks overlay** (its usual hotkey, default ~) and use the **Neon Dial** window: switch mode,
 prev/next, show the Apple sign-in window (first time only), pick a sound texture, and tune the radio physics. Hotkeys for next/previous
 track can be bound in CET's bindings. Everything else is the normal in-game radio: station wheel, radio on/off, volume.
-(The old control page at http://127.0.0.1:8765 still exists as an optional extra.)
+(An optional browser control page exists but is switched off by default, see SECURITY.md.)
+
+## Station look and now-playing
+The station has its own icon (a tuner dial in the game's yellow HUD style) and shows the **current song as "Artist - Title"** on the radio select screen and
+in the station-switch pop-up like other stations do (Spotify standalone shows the title).
+
+## Privacy and security
+See [SECURITY.md](SECURITY.md): logins are never stored by Neon Dial itself, nothing identifying reaches logs or the panel, nothing is uploaded, and there is a one-click
+"Sign out and erase saved logins" in the in-game panel. The browser control page is off by default.
 
 ## Radio physics and texture
 - **Radio boxes**: the *Radioport volume* setting now applies to boxes (RadioExt ignores it), volume falls off with distance

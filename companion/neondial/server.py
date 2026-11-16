@@ -59,6 +59,10 @@ class Hub:
                 log(f"error: {self.error}")
 
 
+ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+MAX_STREAM_CLIENTS = 6
+
+
 def make_stream_handler(engine, hub):
     """Plain Icecast-style stream (HTTP/1.0, no chunking): what the game's FMOD audio engine expects."""
     async def handle(reader, writer):
@@ -68,6 +72,19 @@ def make_stream_handler(engine, hub):
             writer.close()
             return
         method = head.split(b" ", 1)[0]
+        # Only the game's own audio engine should ever read this stream. Browsers (any web page you visit) always send
+        # Fetch-Metadata / Origin / Referer headers, and a DNS-rebinding page sends a foreign Host: refuse all of those.
+        names = {ln.split(b":", 1)[0].strip().lower(): ln.split(b":", 1)[1].strip().lower()
+                 for ln in head.split(b"\r\n")[1:] if b":" in ln}
+        host = names.get(b"host", b"127.0.0.1").decode(errors="replace").split(":")[0]
+        if (any(n.startswith(b"sec-fetch-") for n in names) or b"origin" in names or b"referer" in names
+                or host not in ALLOWED_HOSTS or len(engine.clients) >= MAX_STREAM_CLIENTS):
+            writer.write(b"HTTP/1.0 403 Forbidden\r\nConnection: close\r\n\r\n")
+            try:
+                await writer.drain()
+            finally:
+                writer.close()
+            return
         writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\nicy-name: Neon Dial FM\r\n"
                      b"icy-br: 320\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
         if method != b"GET":
@@ -93,9 +110,34 @@ def make_stream_handler(engine, hub):
     return handle
 
 
+@web.middleware
+async def guard(request, handler):
+    """The optional web page is a local control surface: refuse anything that doesn't come from itself."""
+    port = request.app["port"]
+    host = request.headers.get("Host", "").split(":")[0].lower()
+    if host not in ALLOWED_HOSTS:
+        return web.Response(status=403, text="forbidden")
+    site = request.headers.get("Sec-Fetch-Site")
+    if site and site not in ("same-origin", "none"):
+        return web.Response(status=403, text="forbidden")
+    origin = request.headers.get("Origin")
+    if origin and origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+        return web.Response(status=403, text="forbidden")
+    if request.method not in ("GET", "HEAD") and request.content_type != "application/json":
+        return web.Response(status=415, text="json only")
+    resp = await handler(request)
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    resp.headers["Content-Security-Policy"] = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                                               "connect-src 'self'; img-src data:; frame-ancestors 'none'")
+    return resp
+
+
 def build_app(cfg, engine, provider):
     hub = Hub(cfg, provider)
-    app = web.Application()
+    app = web.Application(middlewares=[guard])
+    app["port"] = cfg["port"]
 
     async def stream(request):
         resp = web.StreamResponse(headers={
@@ -191,6 +233,10 @@ def build_app(cfg, engine, provider):
             elif key == "texture":
                 engine.texture.set_mode(val)
                 config_mod.save_settings({"texture": val})
+            elif key == "forget":
+                await hub.provider.forget()
+                config_mod.wipe_credentials()
+                log("signed out: saved logins erased")
             elif key == "output":
                 config_mod.save_settings({"output": val})
                 await hub.provider.set_output(val)
