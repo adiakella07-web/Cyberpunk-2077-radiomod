@@ -166,7 +166,7 @@ def selftest(path):
                     mgr = await sysmod.Manager.request_async()
                     log_(f"SMTC sessions visible: {len(list(mgr.get_sessions()))}")
                 rd, wr = await asyncio.open_connection("127.0.0.1", cfg["stream_port"])
-                wr.write(b"GET /Neon_Dial_Your_Music.mp3 HTTP/1.1\r\nHost: x\r\n\r\n")
+                wr.write(b"GET /Neon_Dial_Your_Music.mp3 HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
                 await wr.drain()
                 data = await asyncio.wait_for(rd.readexactly(20000), 6)
                 log_(f"stream first line: {data.split(b'\r\n')[0].decode()} ; bytes: {len(data)} ; chunked={b'chunked' in data[:300].lower()}")
