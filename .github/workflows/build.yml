@@ -42,7 +42,7 @@ jobs:
           $log = New-Object System.Collections.Generic.List[string]
           function L($m) { $log.Add([string]$m) }
           function Run($label, [scriptblock]$sb) {
-            $out = (& $sb 2>&1 | Out-String).Trim()
+            $out = ((& $sb 2>&1 | Out-String).Trim()) -replace "\s+", " "
             L "[$label] exit=$LASTEXITCODE $($out.Substring(0, [Math]::Min(500, $out.Length)))"
           }
           Run "pillow" { python -m pip install pillow }
