@@ -38,22 +38,31 @@ jobs:
         shell: pwsh
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
-          python -m pip install pillow
-          python assets/icon/make_icon.py assets/icon/raw/mod/neondial/neon_dial_icon.png
-          gh release download 9.1.1 -R WolvenKit/WolvenKit -p "WolvenKit.Console-9.1.1.zip" -D wk
-          Expand-Archive wk/WolvenKit.Console-9.1.1.zip wk/cli
+          $ErrorActionPreference = "Continue"
+          $log = New-Object System.Collections.Generic.List[string]
+          function L($m) { $log.Add([string]$m) }
+          function Run($label, [scriptblock]$sb) {
+            $out = (& $sb 2>&1 | Out-String).Trim()
+            L "[$label] exit=$LASTEXITCODE $($out.Substring(0, [Math]::Min(500, $out.Length)))"
+          }
+          Run "pillow" { python -m pip install pillow }
+          Run "png" { python assets/icon/make_icon.py assets/icon/raw/mod/neondial/neon_dial_icon.png }
+          Run "download" { gh release download 9.1.1 -R WolvenKit/WolvenKit -p "WolvenKit.Console-9.1.1.zip" -D wk --clobber }
+          Expand-Archive wk/WolvenKit.Console-9.1.1.zip wk/cli -Force
           $cli = (Get-ChildItem wk/cli -Filter WolvenKit.CLI.exe -Recurse | Select-Object -First 1).FullName
-          Write-Output "cli: $cli"
+          L "cli: $cli"
           New-Item -ItemType Directory -Force pack/NeonDial/mod/neondial | Out-Null
-          & $cli import assets/icon/raw -o pack/NeonDial
+          Run "import" { & $cli import assets/icon/raw -o pack/NeonDial }
           Copy-Item assets/icon/neon_dial_icons.inkatlas pack/NeonDial/mod/neondial/
-          Get-ChildItem pack -Recurse -File | ForEach-Object { Write-Output $_.FullName }
-          & $cli pack pack/NeonDial -o pack/out
-          Get-ChildItem pack/out -Recurse -File | ForEach-Object { Write-Output $_.FullName }
-          if (-not (Test-Path pack/out/NeonDial.archive)) { throw "archive not produced" }
-          # verify the texture round-trips with its alpha channel
-          & $cli export pack/NeonDial/mod/neondial/neon_dial_icon.xbm -o pack/check
-          python assets/icon/verify_icon.py pack/check
+          L ("staged: " + ((Get-ChildItem pack -Recurse -File | ForEach-Object { $_.FullName.Replace($PWD.Path, "") }) -join "; "))
+          Run "pack" { & $cli pack pack/NeonDial -o pack/out }
+          L ("packed: " + ((Get-ChildItem pack/out -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $($_.Length)" }) -join "; "))
+          Run "export" { & $cli export pack/NeonDial/mod/neondial/neon_dial_icon.xbm -o pack/check }
+          L ("exported: " + ((Get-ChildItem pack/check -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Replace($PWD.Path, "") }) -join "; "))
+          Run "verify" { python assets/icon/verify_icon.py pack/check }
+          $text = $log -join " | "
+          if ((Test-Path pack/out/NeonDial.archive) -and ($text -match "alpha range")) { Write-Output "::notice::ICON OK | $text" }
+          else { Write-Output "::error::ICON PROBLEM | $text"; exit 1 }
       - name: Build companion exe
         working-directory: companion
         run: |
