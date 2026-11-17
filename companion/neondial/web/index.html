@@ -33,6 +33,7 @@ button.alt,select{background:#2a2a3a;color:#fff}
 </div>
 <div class=card style="font:12px monospace;color:#9ab"><b>Activity</b><div id=logbox>-</div></div>
 <script>
+const esc=t=>String(t==null?'':t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const j=async(u,o)=>(await fetch(u,o)).json();
 const post=(u,b)=>j(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
 async function ctl(a){const r=await post("/api/control",{action:a});if(r.error)alert(r.error)}
@@ -49,9 +50,9 @@ async function refresh(){
   const ap=S.provider==="apple-standalone"; const sa=S.provider==="standalone"||ap;
   document.getElementById("appCard").style.display=sa?"none":"block";
   const box=document.getElementById("standaloneBox"); box.style.display=sa?"block":"none";
-  if(ap){box.innerHTML=(S.apple_status||"")+'<br><button class=alt onclick="win(true)">Show Apple Music window</button><button class=alt onclick="win(false)">Hide window</button><br>First time: click Show window, sign in to Apple Music, start a playlist, then Hide window.'}
-  else if(sa){box.textContent=(S.librespot_found?"":"librespot.exe is missing from the mod folder. ")+(S.standalone_status||"")+" - First time: log in to Spotify in the browser window that opens, then in any Spotify app choose the device \"Neon Dial FM\" and play a playlist. You can then close Spotify."}
-  if(n.title)h+="<br><br>♪ "+n.title+" — "+(n.artist||"")+(n.playing?"":" (paused)");
+  if(ap){box.innerHTML=esc(S.apple_status||"")+'<br><button class=alt onclick="win(true)">Show Apple Music window</button><button class=alt onclick="win(false)">Hide window</button><br>First time: click Show window, sign in to Apple Music, start a playlist, then Hide window.'}
+  else if(sa){box.textContent=(S.librespot_found?"":"librespot.exe is missing from the mod folder. ")+(S.standalone_status||"")+" - First time: in a Spotify app on the same Wi-Fi choose the device \"Neon Dial FM\" and play a playlist (that also logs it in). You can then close Spotify."}
+  if(n.title)h+="<br><br>♪ "+esc(n.title)+" — "+esc(n.artist||"")+(n.playing?"":" (paused)");
   if(S.output==="game"&&!sa){h+="<br>Audio path: "+(S.capturing?"<b>game radio mix</b> (capturing)":(S.fallback?"speakers (fallback)":(S.helper_found?"game radio mix (starts when you tune in)":"helper missing - using speakers")))}
   if(S.fallback)h+='<br><span class=err></span>';
   const e=S.error||S.provider_error; if(e)h+='<br><br><span class=err></span>';

@@ -35,6 +35,7 @@ class AudioEngine:
         self.clients: set[asyncio.Queue] = set()
         self._enc = _encoder()
         self._primed = False
+        self._warned = False
         self.texture = Texture()
         self.hold = False                 # set by sources that want audio kept while idle
         # Sent instantly to every new listener so the game's stream buffer fills at once and the
@@ -96,11 +97,19 @@ class AudioEngine:
             else:
                 chunk = silence
                 self._primed = False          # starved: rebuild the cushion
-            if self.clients and self.texture.mode != "off":
-                chunk = self.texture.process(chunk)
-            mp3 = self._enc.encode(chunk)
-            if mp3 and self.clients:
-                self._publish(bytes(mp3))
+            try:
+                if self.clients and self.texture.mode != "off":
+                    chunk = self.texture.process(chunk)
+                mp3 = self._enc.encode(chunk)
+                if mp3 and self.clients:
+                    self._publish(bytes(mp3))
+            except Exception as e:                    # keep the stream alive; drop the texture if it is the culprit
+                if self.texture.mode != "off":
+                    self.texture.set_mode("off")
+                if not self._warned:
+                    self._warned = True
+                    from .log import log
+                    log(f"audio frame error ({type(e).__name__}); texture switched off")
             next_t += FRAME_SEC
             delay = next_t - time.monotonic()
             if delay < -1:

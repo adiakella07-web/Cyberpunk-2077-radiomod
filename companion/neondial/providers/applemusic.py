@@ -15,6 +15,7 @@ import psutil
 
 from ..config import DATA_DIR
 from ..log import log
+from ..tasks import spawn
 from . import ProviderError
 from .system import SystemProvider
 
@@ -41,17 +42,17 @@ class AppleWebProvider(SystemProvider):
     async def start(self):
         await super().start()
         self.gui["want"].set()                       # main thread starts the embedded-browser loop
-        asyncio.create_task(self._open())
+        spawn(self._open())
 
     async def stop(self):
         if getattr(self, "_guard", None):
             self._guard.cancel()
-        await super().stop()
+        await super().stop()                         # pauses the page if we were tuned in, restores the window's volume
 
     async def _watch_navigation(self):
         from urllib.parse import urlparse
         while True:
-            await asyncio.sleep(2)
+            await asyncio.sleep(0.5)
             try:
                 url = await asyncio.to_thread(self.win.get_current_url)
             except Exception:
@@ -89,7 +90,7 @@ class AppleWebProvider(SystemProvider):
             HIDDEN_FLAG.write_text("1")
             return False
         self.win.events.closing += on_closing
-        self._guard = asyncio.create_task(self._watch_navigation())
+        self._guard = spawn(self._watch_navigation())
         self.status = ("sign in to Apple Music in the window, start a playlist, then click Hide window"
                        if show else "ready (window hidden): tune in to play")
         log("Apple Music window " + ("shown for sign-in" if show else "created hidden"))

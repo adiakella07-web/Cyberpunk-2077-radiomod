@@ -4,6 +4,7 @@ import asyncio
 import math
 
 from ..audio import RATE, FRAME_BYTES
+from ..tasks import spawn
 from . import Provider
 
 NOTES = [220.0, 261.63, 329.63, 392.0, 329.63, 261.63]
@@ -19,7 +20,7 @@ class DemoProvider(Provider):
         self._task = None
 
     async def start(self):
-        self._task = asyncio.create_task(self._loop())
+        self._task = spawn(self._loop())
 
     async def play(self):
         self.playing = True

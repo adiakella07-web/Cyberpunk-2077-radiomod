@@ -56,20 +56,49 @@ def _merge(base, over):
     return base
 
 
+ALLOWED = {
+    "provider": ("system", "standalone", "apple-standalone", "demo"),
+    "music_app": ("auto", "apple", "spotify", "itunes"),
+    "spotify_login": ("zeroconf", "oauth"),
+    "texture": ("off", "radio", "lofi", "warm"),
+    "output": ("game", "speakers"),
+}
+
+
+def sanitize(cfg):
+    """Settings may come from files other programs can write, so only accept known keys with sane values."""
+    clean = copy.deepcopy(DEFAULTS)
+    for key, default in DEFAULTS.items():
+        val = cfg.get(key, default)
+        if key in ALLOWED:
+            val = val if val in ALLOWED[key] else default
+        elif key in ("port", "stream_port"):
+            val = val if isinstance(val, int) and not isinstance(val, bool) and 1024 <= val <= 65535 else default
+        elif key == "idle_pause_seconds":
+            val = float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) and 0.1 <= val <= 30 else default
+        elif key == "web_panel":
+            val = val if isinstance(val, bool) else default
+        elif key == "game_process":
+            val = val if isinstance(val, str) and val.lower().endswith(".exe") and "\\" not in val and "/" not in val else default
+        clean[key] = val
+    return clean
+
+
 def load(path=None):
-    """defaults < optional config.toml < settings.json (written by the web UI)."""
+    """defaults < optional config file (only when --config is given: never read from the working directory) < settings.json."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     cfg = copy.deepcopy(DEFAULTS)
-    p = pathlib.Path(path) if path else pathlib.Path("config.toml")
-    if p.exists():
-        with open(p, "rb") as f:
+    if path and pathlib.Path(path).exists():
+        with open(path, "rb") as f:
             _merge(cfg, tomllib.load(f))
     if SETTINGS_FILE.exists():
         try:
-            _merge(cfg, json.loads(SETTINGS_FILE.read_text()))
+            data = json.loads(SETTINGS_FILE.read_text())
+            if isinstance(data, dict):
+                _merge(cfg, data)
         except Exception:
             pass
-    return cfg
+    return sanitize(cfg)
 
 
 def save_settings(patch: dict):
@@ -81,4 +110,6 @@ def save_settings(patch: dict):
             cur = {}
     _merge(cur, patch)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(cur, indent=2))
+    tmp = SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cur, indent=2))
+    tmp.replace(SETTINGS_FILE)                       # atomic: never leave a half-written settings file

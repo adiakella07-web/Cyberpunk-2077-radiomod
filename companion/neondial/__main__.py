@@ -13,17 +13,60 @@ from aiohttp import web
 
 from . import config as config_mod
 from .audio import AudioEngine
-from .log import log
+from .log import RedactingFile, log
+from .tasks import spawn
 from . import bridge
 from .server import build_app, make_stream_handler
 
 
 def _fix_stdio():
-    """Windowed (no-console) builds have no stdout; log to a file instead."""
+    """Windowed (no-console) builds have no stdout; log to a file instead (size-capped, scrubbed of account details)."""
     if sys.stdout is None or sys.stderr is None:
         config_mod.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        f = open(config_mod.DATA_DIR / "companion.log", "a", buffering=1, encoding="utf-8")
-        sys.stdout = sys.stderr = f
+        path = config_mod.DATA_DIR / "companion.log"
+        try:
+            if path.exists() and path.stat().st_size > 1_000_000:
+                path.write_text("")
+        except OSError:
+            pass
+        f = open(path, "a", buffering=1, encoding="utf-8")
+        sys.stdout = sys.stderr = RedactingFile(f)
+
+
+def _bind_children_to_us():
+    """Windows: put this program in a job object that kills every child (audio helper, Spotify receiver) when it exits,
+    even if it is killed from Task Manager, so nothing is left running (or advertising on your network) afterwards."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in ("a", "b", "c", "d", "e", "f")]
+
+        class BASIC(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class EXTENDED(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", BASIC), ("IoInfo", IO_COUNTERS), ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        k32 = ctypes.windll.kernel32
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        job = k32.CreateJobObjectW(None, None)
+        info = EXTENDED()
+        info.BasicLimitInformation.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))   # JobObjectExtendedLimitInformation
+        k32.AssignProcessToJobObject(job, k32.GetCurrentProcess())
+        globals()["_JOB"] = job                                 # keep the handle open for the life of the process
+    except Exception as e:                                      # best effort only
+        log(f"couldn't set up child cleanup: {type(e).__name__}")
 
 
 GUI = {"want": threading.Event(), "ready": threading.Event()}
@@ -79,22 +122,32 @@ async def serve(cfg, engine, provider, ready, watch, watch_pid_arg=None):
 
     async def shutdown():
         try:
-            await provider.stop()      # restores the music app's volume, stops capture
+            await asyncio.wait_for(app["hub"].provider.stop(), 6)   # restores the music app's volume, stops capture
+        except Exception:
+            pass
         finally:
             os._exit(0)
     app["shutdown"] = shutdown
 
     async def switch(mode):
+        if mode not in config_mod.ALLOWED["provider"]:
+            raise ValueError("unknown mode")
         hub = app["hub"]
-        await hub.provider.stop()
+        try:
+            await asyncio.wait_for(hub.provider.stop(), 6)
+        except Exception as e:
+            log(f"stopping the old mode: {type(e).__name__}")
         cfg["provider"] = mode
         engine.hold = False
         engine.flush()
         new = make_provider(cfg, engine)
         hub.provider = new
-        await new.start()
-        if hub.tuned:
-            await new.play()
+        try:
+            await new.start()
+            if hub.tuned:
+                await new.play()
+        except Exception as e:
+            log(f"starting {mode}: {type(e).__name__}: {e}")
     app["switch"] = switch
     runner = web.AppRunner(app)
     await runner.setup()
@@ -109,15 +162,16 @@ async def serve(cfg, engine, provider, ready, watch, watch_pid_arg=None):
     engine.texture.set_mode(cfg.get("texture", "off"))
     mod_dir = bridge.find_mod_dir()
     if mod_dir:
-        asyncio.create_task(bridge.run(app, engine, mod_dir))
+        spawn(bridge.run(app, engine, mod_dir))
     await provider.start()
     base = f"http://127.0.0.1:{cfg['port']}"
-    print(f"Neon Dial companion running ({provider.name}). Stream: http://127.0.0.1:{cfg['stream_port']}/Neon_Dial_Your_Music.mp3  Panel: {base}/")
+    print(f"Neon Dial companion running ({provider.name}). Stream: http://127.0.0.1:{cfg['stream_port']}/Neon_Dial_Your_Music.mp3"
+          + (f"  Panel: {base}/" if cfg.get("web_panel") else ""))
     ready.set()
     if watch:
-        asyncio.create_task(watch_game(cfg["game_process"], shutdown))
+        spawn(watch_game(cfg["game_process"], shutdown))
     if watch_pid_arg:
-        asyncio.create_task(watch_pid(watch_pid_arg, shutdown))
+        spawn(watch_pid(watch_pid_arg, shutdown))
     try:
         await engine.run()
     finally:
@@ -213,6 +267,7 @@ def selftest(path):
 
 def cli():
     _fix_stdio()
+    _bind_children_to_us()
     ap = argparse.ArgumentParser(prog="NeonDial")
     ap.add_argument("--config", help="optional config.toml")
     ap.add_argument("--provider", help="override provider: apple | spotify | demo")
@@ -230,7 +285,6 @@ def cli():
 
     engine = AudioEngine()
     provider = make_provider(cfg, engine)
-    ready = threading.Event()
     t = threading.Thread(
         target=lambda: asyncio.run(serve(cfg, engine, provider, threading.Event(), args.watch_game, args.watch_pid)),
         daemon=True)

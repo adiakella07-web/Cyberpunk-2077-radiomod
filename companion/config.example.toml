@@ -1,5 +1,8 @@
-# Optional. Copy to config.toml next to the exe/run.py to override defaults.
-port = 8765
-provider = "system"        # "system" = control your running music app, "demo" = test tone
+# Optional. Use with:  NeonDial.exe --config config.toml   (it is never picked up automatically)
+# Settings made in the in-game panel are stored in %USERPROFILE%\.neondial\settings.json and win over this file.
+provider = "system"        # system | standalone | apple-standalone | demo (test tone)
 music_app = "auto"         # auto | apple | spotify | itunes
-idle_pause_seconds = 6     # pause this long after you tune away from the station
+output = "game"            # game = through the game's radio mix | speakers
+texture = "off"            # off | radio | lofi | warm
+idle_pause_seconds = 1.0   # pause this long after you tune away from the station
+web_panel = false          # optional browser control page on 127.0.0.1:port (off by default)

@@ -24,6 +24,7 @@ import psutil
 
 from ..config import DATA_DIR
 from ..log import log
+from ..tasks import spawn
 from . import Provider, ProviderError
 
 try:  # Windows only
@@ -47,7 +48,7 @@ def helper_path():
     env = os.environ.get("NEONDIAL_AUDIO_HELPER")
     cands = [pathlib.Path(env)] if env else []
     base = pathlib.Path(sys.executable).parent if getattr(sys, "frozen", False) else pathlib.Path(__file__).resolve().parents[2]
-    cands += [base / "NeonDialAudio.exe", pathlib.Path.cwd() / "NeonDialAudio.exe"]
+    cands += [base / "NeonDialAudio.exe"]          # only the copy shipped next to this program
     return next((c for c in cands if c.exists()), None)
 
 
@@ -117,11 +118,11 @@ class Capture:
     async def start(self, pid, mode="include"):
         await self.stop()
         self.proc = await asyncio.create_subprocess_exec(
-            str(self.helper), "capture", str(pid), mode,
+            str(self.helper), "capture", str(pid), mode, "--parent", str(os.getpid()),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
         self.key, self.last_audio, self.max_peak = (pid, mode), 0.0, 0
         self._rem, self._peaks = b"", collections.deque(maxlen=600)
-        self.task = asyncio.create_task(self._read(self.proc))
+        self.task = spawn(self._read(self.proc))
 
     async def _read(self, proc):
         while True:
@@ -183,6 +184,7 @@ class SystemProvider(Provider):
         self.vol_pids = set()
         self.now, self.apps, self.error = {}, [], None
         self._monitor = None
+        self._watch = None
 
     # ---- media session -------------------------------------------------
     async def _manager(self):
@@ -245,7 +247,12 @@ class SystemProvider(Provider):
         proc = await asyncio.create_subprocess_exec(
             str(self.helper), *map(str, args),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, creationflags=NO_WINDOW)
-        out, _ = await proc.communicate()
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), 8)
+        except asyncio.TimeoutError:
+            proc.kill()
+            log("audio helper timed out")
+            return ""
         return out.decode(errors="replace")
 
     async def _sessions(self):
@@ -278,8 +285,18 @@ class SystemProvider(Provider):
                 self.orig = best if best > 0.05 else 1.0
                 log(f"turned the music app's own volume down (was {self.orig:.2f})")
             self.vol_pids |= set(prev)
-            STATE_FILE.write_text(json.dumps({"orig": self.orig, "pids": sorted(self.vol_pids)}))
+            self._save_state()
         return bool(prev)
+
+    def _save_state(self):
+        procs = []
+        for pid in sorted(self.vol_pids):
+            try:
+                p = psutil.Process(pid)
+                procs.append({"pid": pid, "name": p.name(), "created": p.create_time()})
+            except psutil.Error:
+                pass
+        STATE_FILE.write_text(json.dumps({"orig": self.orig, "procs": procs}))
 
     async def _restore(self):
         if self.orig is not None:
@@ -294,11 +311,23 @@ class SystemProvider(Provider):
             pass
 
     async def recover(self):
+        """If the last run died while the music app was turned down, put it back. Process ids are reused by Windows, so
+        only touch a process that is still the very same one (same name and start time)."""
         try:
             st = json.loads(STATE_FILE.read_text())
+            orig = float(st.get("orig", 1.0))
+            safe = set()
+            for rec in st.get("procs", []):
+                try:
+                    p = psutil.Process(int(rec["pid"]))
+                    if p.name() == rec["name"] and abs(p.create_time() - float(rec["created"])) < 1.5:
+                        safe.add(p.pid)
+                except (psutil.Error, KeyError, ValueError, TypeError):
+                    pass
+            if safe and 0.0 <= orig <= 1.0:
+                await self._volume(orig, safe)
         except Exception:
-            return
-        await self._volume(float(st.get("orig", 1.0)), set(st.get("pids", [])))
+            pass
         STATE_FILE.unlink(missing_ok=True)
 
     # ---- Provider API --------------------------------------------------
@@ -306,9 +335,17 @@ class SystemProvider(Provider):
         await self.recover()
 
     async def stop(self):
+        was_tuned = self.tuned
         self.tuned = False
-        if self._monitor:
-            self._monitor.cancel()
+        for t in (self._monitor, self._watch):
+            if t:
+                t.cancel()
+        if was_tuned:
+            try:                                           # leaving the station (or closing the game): stop the music too
+                if (await self._ctl_info())[1]:
+                    await self._ctl_pause()
+            except Exception:
+                pass
         await self._restore()
         if self.capture:
             await self.capture.stop()
@@ -331,10 +368,13 @@ class SystemProvider(Provider):
             self.we_started = True
         else:
             log("music app was already playing")
+        if self._monitor:
+            self._monitor.cancel()
+        if self._watch:
+            self._watch.cancel()
         if game_mix:
-            if self._monitor:
-                self._monitor.cancel()
-            self._monitor = asyncio.create_task(self._probe(exes))
+            self._monitor = spawn(self._probe_guarded(exes))
+        self._watch = spawn(self._keepalive())
 
     async def _candidates(self, exes):
         root, app_all = self._app_tree(exes)
@@ -355,6 +395,35 @@ class SystemProvider(Provider):
         if self.good:                                     # try what worked before first
             cands.sort(key=lambda c: c[0] != self.good)
         return cands, app_all | set(mine), audible_mine, audible_any
+
+    async def _probe_guarded(self, exes):
+        try:
+            await self._probe(exes)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log(f"capture setup failed: {type(e).__name__}: {e}")
+            await self._give_up("Couldn't set up the game audio path; playing through your speakers.")
+
+    async def _keepalive(self):
+        """While tuned in the music should be playing. If it stops by itself (a hiccup in the app or page), start it again."""
+        resumes = []
+        while self.tuned:
+            await asyncio.sleep(2.5)
+            try:
+                playing = (await self._ctl_info())[1]
+            except Exception:
+                continue
+            if self.tuned and not playing:
+                now = time.monotonic()
+                resumes = [t for t in resumes if now - t < 30]
+                if len(resumes) < 3:                       # never fight the user: give up after 3 tries in 30 s
+                    resumes.append(now)
+                    log("the music stopped by itself; resuming")
+                    try:
+                        await self._ctl_play()
+                    except Exception:
+                        pass
 
     async def _probe(self, exes):
         """Find a capture strategy that really delivers audio, then silence the app's speakers."""
@@ -439,10 +508,11 @@ class SystemProvider(Provider):
 
     async def pause(self):
         self.tuned = False
-        if self._monitor:
-            self._monitor.cancel()
+        for t in (self._monitor, self._watch):
+            if t:
+                t.cancel()
         try:
-            if self.we_started and (await self._ctl_info())[1]:
+            if (await self._ctl_info())[1]:                 # whoever started it, leaving the station pauses it
                 await self._ctl_pause()
                 log("sent pause to the music app")
         except ProviderError:

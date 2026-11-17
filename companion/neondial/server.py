@@ -7,13 +7,15 @@ from aiohttp import web
 from . import config as config_mod
 from .log import log, recent
 from .providers import ProviderError
+from .tasks import spawn
 
 WEB = pathlib.Path(__file__).parent / "web"
 
 
 class Hub:
-    """Tracks who is listening to /stream.mp3. First listener = you tuned in to the
-    station in-game -> provider.play(). Last listener gone -> provider.pause() after a short grace."""
+    """Tracks who is listening to the stream. Someone listening = you tuned in to the station in-game -> provider.play().
+    Nobody listening (after a short grace) -> provider.pause(). The wanted state is always recomputed under a lock, so a
+    quick tune-out/tune-in can never leave the music paused while the game is listening."""
 
     def __init__(self, cfg, provider):
         self.provider = provider
@@ -22,6 +24,7 @@ class Hub:
         self.tuned = False
         self.error = None
         self._idle_task = None
+        self._retry_task = None
         self._lock = asyncio.Lock()
 
     def connected(self):
@@ -30,33 +33,65 @@ class Hub:
             self._idle_task.cancel()
             self._idle_task = None
         log(f"game connected to the stream (listeners={self.listeners})")
-        if not self.tuned:
-            asyncio.create_task(self._set(True))
+        spawn(self._sync())
 
     def disconnected(self):
         self.listeners = max(0, self.listeners - 1)
         log(f"game disconnected from the stream (listeners={self.listeners})")
         if self.listeners == 0 and self.tuned:
-            self._idle_task = asyncio.create_task(self._idle_pause())
+            self._idle_task = spawn(self._idle_pause())
 
     async def _idle_pause(self):
         await asyncio.sleep(self.idle)
-        if self.listeners == 0:
-            await self._set(False)
+        await self._sync()
+
+    async def _sync(self):
+        async with self._lock:
+            want = self.listeners > 0
+            if want == self.tuned and self.error is None:
+                return
+            if want == self.tuned and not want:
+                return
+            await self._apply(want)
+
+    async def _apply(self, on):
+        self.tuned = on
+        log("tuned in -> play" if on else "tuned out -> pause")
+        try:
+            await (self.provider.play() if on else self.provider.pause())
+            self.error = None
+        except ProviderError as e:
+            self.error = str(e)
+            log(f"error: {e}")
+            self._schedule_retry(on)
+        except Exception as e:
+            self.error = f"{type(e).__name__}: {e}"
+            log(f"error: {self.error}")
+            self._schedule_retry(on)
+
+    def _schedule_retry(self, on):
+        """The music source may simply not be ready yet (the Apple page loading, the app starting): try again shortly."""
+        if on and (self._retry_task is None or self._retry_task.done()):
+            self._retry_task = spawn(self._retry())
+
+    async def _retry(self):
+        for _ in range(8):
+            await asyncio.sleep(2.5)
+            async with self._lock:
+                if self.listeners == 0 or not self.tuned:
+                    return
+                try:
+                    await self.provider.play()
+                    self.error = None
+                    log("music source is ready now")
+                    return
+                except Exception as e:
+                    self.error = str(e)
 
     async def _set(self, on):
+        """Manual test from the control page."""
         async with self._lock:
-            self.tuned = on
-            log("tuned in -> play" if on else "tuned out -> pause")
-            try:
-                await (self.provider.play() if on else self.provider.pause())
-                self.error = None
-            except ProviderError as e:
-                self.error = str(e)
-                log(f"error: {e}")
-            except Exception as e:
-                self.error = f"{type(e).__name__}: {e}"
-                log(f"error: {self.error}")
+            await self._apply(on)
 
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -97,8 +132,8 @@ def make_stream_handler(engine, hub):
         try:
             while True:
                 writer.write(await q.get())
-                await writer.drain()
-        except (ConnectionError, OSError):
+                await asyncio.wait_for(writer.drain(), 10)
+        except (ConnectionError, OSError, asyncio.TimeoutError):
             pass
         finally:
             engine.remove_client(q)
@@ -139,23 +174,6 @@ def build_app(cfg, engine, provider):
     app = web.Application(middlewares=[guard])
     app["port"] = cfg["port"]
 
-    async def stream(request):
-        resp = web.StreamResponse(headers={
-            "Content-Type": "audio/mpeg", "Cache-Control": "no-cache, no-store", "icy-name": "Neon Dial"})
-        await resp.prepare(request)
-        await resp.write(engine.preroll)
-        q = engine.add_client()
-        hub.connected()
-        try:
-            while True:
-                await resp.write(await q.get())
-        except (ConnectionResetError, ConnectionError):
-            pass
-        finally:
-            engine.remove_client(q)
-            hub.disconnected()
-        return resp
-
     async def index(_):
         return web.FileResponse(WEB / "index.html")
 
@@ -193,6 +211,8 @@ def build_app(cfg, engine, provider):
 
     async def set_app(request):
         app_name = ((await request.json()).get("music_app") or "auto").strip().lower()
+        if app_name not in config_mod.ALLOWED["music_app"]:
+            raise ProviderError("unknown music app")
         config_mod.save_settings({"music_app": app_name})
         hub.provider.pref = app_name
         return {"ok": True}
@@ -218,28 +238,28 @@ def build_app(cfg, engine, provider):
         return {"ok": True}
 
     async def do(key, val):
-        """Single entry point for commands coming from the in-game overlay."""
+        """Single entry point for commands coming from the in-game overlay. Values are checked against fixed lists: the
+        command file can be written by any program on the PC, so nothing from it is trusted."""
         try:
-            if key == "mode":
+            if key == "mode" and val in config_mod.ALLOWED["provider"]:
                 config_mod.save_settings({"provider": val})
                 await app["switch"](val)
-            elif key == "action":
-                if val == "next":
-                    await hub.provider.next()
-                elif val == "prev":
-                    await hub.provider.prev()
-            elif key == "window":
+            elif key == "action" and val in ("next", "prev"):
+                await (hub.provider.next() if val == "next" else hub.provider.prev())
+            elif key == "window" and val in ("show", "hide"):
                 hub.provider.show_window(val == "show")
-            elif key == "texture":
+            elif key == "texture" and val in config_mod.ALLOWED["texture"]:
                 engine.texture.set_mode(val)
                 config_mod.save_settings({"texture": val})
-            elif key == "forget":
+            elif key == "forget" and val == "all":
                 await hub.provider.forget()
                 config_mod.wipe_credentials()
                 log("signed out: saved logins erased")
-            elif key == "output":
+            elif key == "output" and val in config_mod.ALLOWED["output"]:
                 config_mod.save_settings({"output": val})
                 await hub.provider.set_output(val)
+            else:
+                log("ignored an unknown command")
         except ProviderError as e:
             log(f"{key}: {e}")
         except Exception as e:
@@ -248,15 +268,17 @@ def build_app(cfg, engine, provider):
 
     async def set_texture(request):
         mode = (await request.json()).get("texture", "off")
+        if mode not in config_mod.ALLOWED["texture"]:
+            raise ProviderError("unknown texture")
         await do("texture", mode)
         return {"ok": True}
 
     async def quit_app(_):
-        asyncio.create_task(app["shutdown"]())
+        spawn(app["shutdown"]())
         return {"ok": True}
 
     app.add_routes([
-        web.get("/", index), web.get("/{name}.mp3", stream), web.get("/api/state", state),
+        web.get("/", index), web.get("/api/state", state),
         web.post("/api/control", guarded(control)), web.post("/api/music_app", guarded(set_app)),
         web.post("/api/output", guarded(set_output)), web.post("/api/mode", guarded(set_mode)), web.post("/api/texture", guarded(set_texture)), web.post("/api/window", guarded(window)), web.post("/api/quit", guarded(quit_app)),
     ])

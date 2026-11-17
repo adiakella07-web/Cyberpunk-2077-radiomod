@@ -19,6 +19,7 @@ import webbrowser
 
 from ..config import DATA_DIR
 from ..log import log
+from ..tasks import spawn
 from . import Provider
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -31,7 +32,7 @@ def librespot_path():
     env = os.environ.get("NEONDIAL_LIBRESPOT")
     cands = [pathlib.Path(env)] if env else []
     base = pathlib.Path(sys.executable).parent if getattr(sys, "frozen", False) else pathlib.Path(__file__).resolve().parents[2]
-    cands += [base / "librespot.exe", pathlib.Path.cwd() / "librespot.exe"]
+    cands += [base / "librespot.exe"]               # only the copy shipped next to this program
     return next((c for c in cands if c.exists()), None)
 
 
@@ -55,7 +56,7 @@ class StandaloneProvider(Provider):
     async def start(self):
         self.engine.hold = True          # keep buffered music while nobody is tuned in
         if self.exe:
-            self._task = asyncio.create_task(self._run())
+            self._task = spawn(self._run())
 
     async def stop(self):
         self.tuned = False
@@ -77,17 +78,17 @@ class StandaloneProvider(Provider):
     async def _run(self):
         cache = DATA_DIR / "librespot"
         cache.mkdir(parents=True, exist_ok=True)
-        cmd = [str(self.exe), "--name", self.device_name, "--backend", "pipe", "--format", "S16",
-               "--bitrate", "320", "--cache", str(cache), "--disable-audio-cache",
-               "--initial-volume", "100", "--device-type", "speaker"]
-        if (cache / "credentials.json").exists():       # already paired: stop advertising on the network
-            cmd.append("--disable-discovery")
-        if self.login == "oauth":                       # optional: log in through a browser window instead
-            cmd.append("--enable-oauth")
         while True:
+            cmd = [str(self.exe), "--name", self.device_name, "--backend", "pipe", "--format", "S16",
+                   "--bitrate", "320", "--cache", str(cache), "--disable-audio-cache",
+                   "--initial-volume", "100", "--device-type", "speaker"]
+            if (cache / "credentials.json").exists():   # already paired: don't advertise on the network (re-checked every start)
+                cmd.append("--disable-discovery")
+            if self.login == "oauth":                   # optional: log in through a browser window instead
+                cmd.append("--enable-oauth")
             self.proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
-            asyncio.create_task(self._stderr(self.proc))
+            spawn(self._stderr(self.proc))
             while True:
                 # Not tuned in -> don't read: librespot's output blocks, so playback holds its place.
                 if not self.tuned or not self.engine.room():
@@ -111,14 +112,14 @@ class StandaloneProvider(Provider):
             m_title = TITLE.search(text)
             if m_title:
                 self.title = m_title.group(1)
-            m = URL.search(text)
+            m = URL.search(text) if self.login == "oauth" else None
             if m and not self._opened:
                 self._opened = True
                 webbrowser.open(m.group(0))
                 self.status = "log in to Spotify in the browser window that opened"
             if "authenticated" in low or "logged in" in low:
                 self.status = f"ready: in Spotify, pick the device \"{self.device_name}\" and start a playlist"
-            if any(k in low for k in KEEP):
+            if any(k in low for k in KEEP) and not m_title:      # song titles stay out of the log (listening history)
                 log("spotify: " + text[:160])
 
     async def forget(self):

@@ -70,7 +70,7 @@ public:
     }
 };
 
-int Capture(DWORD pid, bool exclude)
+int Capture(DWORD pid, bool exclude, DWORD parentPid)
 {
     _setmode(_fileno(stdout), _O_BINARY);
     AUDIOCLIENT_ACTIVATION_PARAMS params{};
@@ -128,15 +128,25 @@ int Capture(DWORD pid, bool exclude)
         return 5;
     }
 
+    // If the program that started us is gone, quit (nobody is reading our output any more).
+    HANDLE parent = parentPid ? OpenProcess(SYNCHRONIZE, FALSE, parentPid) : nullptr;
+
     std::vector<BYTE> silence;
     for (;;)
     {
         DWORD w = WaitForSingleObject(ev, 500);
         if (w == WAIT_FAILED)
             return 6;
+        if (parent && WaitForSingleObject(parent, 0) == WAIT_OBJECT_0)
+            return 0;
         UINT32 packet = 0;
-        while (SUCCEEDED(capture->GetNextPacketSize(&packet)) && packet > 0)
+        for (;;)
         {
+            HRESULT hrp = capture->GetNextPacketSize(&packet);
+            if (FAILED(hrp))
+                return 8; // device changed/removed: exit so the caller restarts us
+            if (packet == 0)
+                break;
             BYTE* data = nullptr;
             UINT32 frames = 0;
             DWORD flags = 0;
@@ -258,7 +268,18 @@ int wmain(int argc, wchar_t** argv)
     if (argc >= 2 && wcscmp(argv[1], L"sessions") == 0)
         return ListSessions();
     if (argc >= 3 && wcscmp(argv[1], L"capture") == 0)
-        return Capture(static_cast<DWORD>(wcstoul(argv[2], nullptr, 10)), argc >= 4 && wcscmp(argv[3], L"exclude") == 0);
+    {
+        bool exclude = false;
+        DWORD parentPid = 0;
+        for (int i = 3; i < argc; ++i)
+        {
+            if (wcscmp(argv[i], L"exclude") == 0)
+                exclude = true;
+            else if (wcscmp(argv[i], L"--parent") == 0 && i + 1 < argc)
+                parentPid = static_cast<DWORD>(wcstoul(argv[++i], nullptr, 10));
+        }
+        return Capture(static_cast<DWORD>(wcstoul(argv[2], nullptr, 10)), exclude, parentPid);
+    }
     if (argc >= 4 && wcscmp(argv[1], L"volume") == 0)
     {
         std::set<DWORD> pids;

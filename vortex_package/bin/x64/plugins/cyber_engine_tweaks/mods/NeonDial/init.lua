@@ -9,6 +9,7 @@ local SETTINGS_FILE = "settings.txt"
 local cfg = { physics = true, near = 4.0, far = 45.0, cabin = 0.18, dedupe = true, volfix = true }
 local ui = { open = false, status = {}, log = {}, connected = false, lastRead = 0, tick = 0 }
 local lastVol = {}
+local lastApply = {}
 
 local MODES = { "system", "standalone", "apple-standalone" }
 local MODE_LABELS = { "Music app (Apple Music / Spotify must be open)", "Standalone Spotify (no app, Premium)", "Standalone Apple Music (no app)" }
@@ -116,12 +117,16 @@ local function updateVolumes()
             if mounted and cfg.physics then g = g * cfg.cabin end
             if cfg.dedupe and ownOnMain then g = 0.0 end            -- car/pocket radio already plays this station
             local vol = base * g
-            if not lastVol[ch] or math.abs(lastVol[ch] - vol) > 0.002 then
+            local now = os.clock()
+            -- also re-apply once a second: RadioExt resets a channel's volume whenever it (re)starts the radio
+            if not lastVol[ch] or math.abs(lastVol[ch] - vol) > 0.002 or now - (lastApply[ch] or 0) > 1.0 then
                 lastVol[ch] = vol
+                lastApply[ch] = now
                 RadioExt.SetVolume(ch, vol)
             end
         else
             lastVol[ch] = nil
+            lastApply[ch] = nil
         end
     end
 end
@@ -134,6 +139,7 @@ local popupCtrl = nil
 local shownText = nil
 
 local function nowText()
+    if not ui.connected then return nil end             -- helper not running: don't show a stale song
     local t = ui.status.title or ""
     if t == "" then return nil end
     local a = ui.status.artist or ""

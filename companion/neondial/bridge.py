@@ -6,7 +6,7 @@ import pathlib
 import sys
 import time
 
-from .log import recent
+from .log import recent, redact
 
 
 def find_mod_dir():
@@ -47,7 +47,7 @@ def status_text(hub, engine):
         path, note = "test tone", ""
     lines = {
         "ts": int(time.time()), "mode": p.name, "tuned": int(bool(hub.tuned)), "listeners": hub.listeners,
-        "path": path, "note": note or hub.error or "", "title": now.get("title", ""), "artist": now.get("artist", ""),
+        "path": path, "note": redact(note or hub.error or ""), "title": now.get("title", ""), "artist": now.get("artist", ""),
         "playing": int(bool(now.get("playing"))), "texture": engine.texture.mode,
     }
     out = [f"{k}={_clean(v)}" for k, v in lines.items()]
@@ -62,9 +62,9 @@ async def run(app, engine, mod_dir):
     while True:
         try:
             if cmd_f.exists():
-                text = cmd_f.read_text(errors="replace")
+                text = cmd_f.read_text(errors="replace")[:2000]          # the file is tiny; ignore anything bigger
                 cmd_f.unlink(missing_ok=True)
-                for line in text.splitlines():
+                for line in text.splitlines()[:10]:
                     if "=" in line:
                         k, v = line.split("=", 1)
                         await app["do"](k.strip(), v.strip())

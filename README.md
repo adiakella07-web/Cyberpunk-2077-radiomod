@@ -9,7 +9,6 @@ Tune away and it pauses. No accounts, API keys or tokens.
 2. Download `NeonDial-vortex.zip` from the [Releases](../../releases) page and add it to Vortex (drag it in, or *Install from file*), then enable and deploy.
 3. Open Apple Music/Spotify, start a playlist, launch the game from Vortex, tune to **Neon Dial FM**.
 
-Control panel (prev/next, choose music app): http://127.0.0.1:8765 while the game runs.
 
 ## How it works
 - **RadioExt** registers the station and plays a local stream (`http://127.0.0.1:8766/Neon_Dial_Your_Music.mp3`) through the game's own audio engine.
@@ -19,7 +18,7 @@ Control panel (prev/next, choose music app): http://127.0.0.1:8765 while the gam
   While you're tuned in, the app's own Windows mixer volume is turned down so you don't hear it twice (capture happens before that stage).
   Tune away: the app pauses where it is and its volume is restored. Tune back: it resumes.
 
-## Three modes (switch in the control panel, http://127.0.0.1:8765)
+## Three modes (switch in the in-game Neon Dial panel)
 **Music app mode** (default): works with Apple Music or Spotify running on your PC, as described above.
 
 **Standalone Spotify mode**: no music app needs to be open. Neon Dial runs its own Spotify Connect receiver

@@ -4,33 +4,39 @@ on:
   push:
     tags: ["v*"]
 permissions:
-  contents: write
+  contents: read
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: "3.12" }
+      - name: Unit tests
+        run: |
+          python -m pip install -r companion/requirements.txt pytest
+          python -m pytest tests -q
       - name: Build RED4ext launcher plugin + audio helper
         run: |
-          git clone --depth 1 https://github.com/WopsS/RED4ext.SDK launcher/RED4ext.SDK
+          git clone https://github.com/WopsS/RED4ext.SDK launcher/RED4ext.SDK
+          git -C launcher/RED4ext.SDK checkout a34f0ad0a9e4f37cbe1fe001e4ff68c2949d0665
           cmake -S launcher -B launcher/build -A x64
           cmake --build launcher/build --config Release
       - name: Cache librespot build
         id: ls-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: librespot-src/target/release/librespot.exe
-          key: librespot-win-v1
+          key: librespot-win-15e02e8
       - name: Build librespot (Spotify Connect receiver for standalone mode)
         if: steps.ls-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         timeout-minutes: 30
         run: |
-          git clone --depth 1 https://github.com/librespot-org/librespot librespot-src
+          git clone https://github.com/librespot-org/librespot librespot-src
+          git -C librespot-src checkout 15e02e86c72d96dd39d548e3749f00abe39ffdde
           cargo build --release --manifest-path librespot-src/Cargo.toml --no-default-features --features "native-tls with-libmdns"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with: { dotnet-version: "10.0.x" }
       - name: Build custom station icon (texture + archive)
         id: icon
@@ -48,6 +54,8 @@ jobs:
           Run "pillow" { python -m pip install pillow }
           Run "png" { python assets/icon/make_icon.py assets/icon/raw/mod/neondial/neon_dial_icon.png }
           Run "download" { gh release download 9.1.1 -R WolvenKit/WolvenKit -p "WolvenKit.Console-9.1.1.zip" -D wk --clobber }
+          $h = (Get-FileHash wk/WolvenKit.Console-9.1.1.zip -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne "a14eae46931251635256e7b209cd4aa998ae5039a5fbd506fefaab671bf7f451") { throw "WolvenKit download hash mismatch: $h" }
           Expand-Archive wk/WolvenKit.Console-9.1.1.zip wk/cli -Force
           $cli = (Get-ChildItem wk/cli -Filter WolvenKit.CLI.exe -Recurse | Select-Object -First 1).FullName
           L "cli: $cli"
@@ -80,9 +88,17 @@ jobs:
           if ($t -match "SELFTEST OK") { Write-Output "::notice::$t" } else { Write-Output "::error::$t"; exit 1 }
       - name: Package for Vortex
         run: python tools/make_vortex_zip.py companion/dist/NeonDial.exe launcher/build/Release/NeonDial.dll launcher/build/Release/NeonDialAudio.exe NeonDial-vortex.zip librespot-src/target/release/librespot.exe pack/out/NeonDial.archive
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: NeonDial-vortex, path: NeonDial-vortex.zip }
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with: { name: NeonDial-vortex }
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
-        run: gh release create "${{ github.ref_name }}" NeonDial-vortex.zip --title "Neon Dial ${{ github.ref_name }}" --notes "Add NeonDial-vortex.zip to Vortex. Requires Cyber Engine Tweaks, RED4ext and RadioExt. Open your music app first, then tune to Neon Dial FM."
+        run: gh release create "${{ github.ref_name }}" NeonDial-vortex.zip --repo "${{ github.repository }}" --title "Neon Dial ${{ github.ref_name }}" --notes "Add NeonDial-vortex.zip to Vortex. Requires Cyber Engine Tweaks, RED4ext and RadioExt. See SECURITY.md for what is stored and what is not."
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }

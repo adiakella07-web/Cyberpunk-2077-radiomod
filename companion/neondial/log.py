@@ -32,3 +32,19 @@ def log(msg: str):
 
 def recent(n=20):
     return list(_lines)[-n:]
+
+
+class RedactingFile:
+    """Wraps the log file so even tracebacks or stray prints can't write account details or the Windows user name."""
+
+    def __init__(self, f):
+        self._f = f
+
+    def write(self, text):
+        return self._f.write(redact(text))
+
+    def flush(self):
+        self._f.flush()
+
+    def isatty(self):
+        return False
