@@ -30,7 +30,7 @@ Tune away and it pauses. No accounts, API keys or tokens.
 built-in browser window (Microsoft Edge WebView2, already on Windows 11 and most Windows 10).
 1. Switch Mode to *Standalone Apple Music* in the in-game panel. A small window opens (alt-tab to it if you play fullscreen): sign in with your Apple ID once and start a playlist, then click **Hide window**. It stays hidden from then on.
 2. Tune to the station: the page plays, its audio is captured from Neon Dial's own browser processes and goes through the game's radio mix. Tune away: it pauses and keeps its place.
-No developer account or tokens, it is just you logged in on the website. (Apple's DRM allows playback only in approved players such as its website, so this is the only app-free route.)
+No developer account or tokens, it is just you logged in on the website. The page's audio is captured into the game's mix when Windows allows it; if Windows hands back only silence for it, Neon Dial detects that (it checks the audio level, and logs it in the Activity box), leaves the volume alone and the music plays through your speakers instead. **Standalone Spotify is the reliable way to get music into the game's radio mix.** (Apple's DRM allows playback only in approved players such as its website, so this is the only app-free route.)
 
 ## Controls and the in-game panel
 No web page needed: open the **Cyber Engine Tweaks overlay** (its usual hotkey, default ~) and use the **Neon Dial** window: switch mode,
