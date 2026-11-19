@@ -41,6 +41,8 @@ EXES = (("applemusic", ["applemusic.exe"]), ("itunes", ["itunes.exe"]),
         ("apple", ["applemusic.exe", "itunes.exe"]), ("spotify", ["spotify.exe"]))
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 STATE_FILE = DATA_DIR / "volume_state.json"
+PROFILE_FILE = DATA_DIR / "capture_profile.json"   # what this PC does with an app's volume when capturing (learned once)
+FLOOR = 0.04                                        # the app's own volume while it is being captured (-28 dB)
 AUDIBLE = 0.01          # session meter level (0-1) that counts as 'the app is making sound'
 REAL = 150              # capture level (of 32767) that counts as real audio; level 1-2 is just Windows' dither noise
 
@@ -183,6 +185,7 @@ class SystemProvider(Provider):
         self.good = None                                  # label of the capture strategy that worked last
         self.duck_vol = 0.0                               # how far the app's own volume is turned down (learned)
         self.learned = False
+        self.post_volume = self._load_profile()           # True: Windows applies the app volume BEFORE capture; None: unknown
         self.strategy = None
         self.orig = None
         self.vol_pids = set()
@@ -243,6 +246,21 @@ class SystemProvider(Provider):
 
     def _app_tree(self, exes):
         return app_pids(exes)
+
+    # ---- learned behaviour of this PC ----------------------------------------
+    @staticmethod
+    def _load_profile():
+        try:
+            v = json.loads(PROFILE_FILE.read_text()).get("post_volume")
+            return v if isinstance(v, bool) else None
+        except Exception:
+            return None
+
+    def _save_profile(self):
+        try:
+            PROFILE_FILE.write_text(json.dumps({"post_volume": self.post_volume}))
+        except OSError:
+            pass
 
     # ---- helper calls --------------------------------------------------
     async def _run(self, *args):
@@ -493,30 +511,89 @@ class SystemProvider(Provider):
                     return
 
     async def _settle(self, duck_pids, pre_peak):
-        """Silence the app's own speakers without silencing the capture. Windows may apply the app's volume before or
-        after capture, so find out: try fully off first; if the capture level collapses, keep a low floor and boost it back."""
-        self.capture.gain = 1.0
-        vols = [0.0, 0.04]
-        if self.learned and self.duck_vol in vols:
-            vols.remove(self.duck_vol)
-            vols.insert(0, self.duck_vol)
+        """Silence the app's own speakers without silencing the capture.
+
+        Depending on the PC, Windows applies an app's volume either AFTER capture (turning the app down also turns the
+        capture down) or BEFORE it. We learn which once and remember it, so there is no audible 'test dip' in later runs:
+          * volume applied after capture -> keep the app at a low floor and boost the capture back by the same factor
+          * volume applied before capture -> turn the app fully off, the capture is unaffected
+        """
+        known = self.post_volume
+        self.capture.gain = (1.0 / FLOOR) if known else 1.0      # pre-set so a known-boost PC never dips
+        found = False
+        for _ in range(6):                                        # the app's mixer session may appear a moment late
+            if await self._duck(duck_pids, FLOOR if known is not False else 0.0):
+                found = True
+                break
+            await asyncio.sleep(0.5)
+        if not found:
+            await self._give_up("Couldn't find the music app's volume control, so it would play twice; using your speakers.")
+            return False
         orig = max(self.orig or 1.0, 0.05)
-        for vol in vols:
-            await self._duck(duck_pids, vol)
-            await asyncio.sleep(1.4)
-            peak = self.capture.recent_peak(1.0)
-            need = max(REAL, 0.25 * pre_peak) if vol == 0.0 else max(20, 0.3 * pre_peak * vol / orig)
-            if peak >= need:
-                self.duck_vol = vol
-                if vol > 0.0:
-                    self.capture.gain = min(40.0, max(1.0, orig / vol))
-                    log(f"app volume {vol:.2f}: capture level {peak} (was {pre_peak}); boosting x{self.capture.gain:.0f}")
+
+        if known is True:
+            self.capture.gain = min(40.0, orig / FLOOR)
+            await asyncio.sleep(1.0)
+            raw = self.capture.recent_peak(1.0)
+            if raw >= max(20, 0.3 * pre_peak * FLOOR / orig):
+                self.duck_vol = FLOOR
                 return True
-            log(f"app volume {vol:.2f}: capture level {peak}, needed {need:.0f} (was {pre_peak} before turning it down)")
+            log(f"remembered setting no longer fits (level {raw}); testing again")
+            self.post_volume, known = None, None
+        elif known is False:
+            await asyncio.sleep(0.8)
+            raw = self.capture.recent_peak(0.8)
+            if raw >= max(REAL, 0.25 * pre_peak):
+                self.duck_vol = 0.0
+                return True
+            log(f"remembered setting no longer fits (level {raw}); testing again")
+            self.post_volume, known = None, None
+
+        # unknown PC: one short test at the low floor (about a quarter of a second), then decide
+        self.capture.gain = 1.0
+        await self._duck(duck_pids, FLOOR)
+        await asyncio.sleep(0.45)
+        raw = self.capture.recent_peak(0.3)
+        if raw >= 0.5 * max(pre_peak, 1):                         # unaffected by the app's volume
+            self.post_volume = False
+            await self._duck(duck_pids, 0.0)
+            await asyncio.sleep(0.8)
+            if self.capture.recent_peak(0.6) >= max(REAL, 0.25 * pre_peak):
+                self.duck_vol = 0.0
+                log("Windows captures this app before its volume setting: app turned fully down")
+            else:
+                await self._duck(duck_pids, FLOOR)
+                self.duck_vol = FLOOR
+            self._save_profile()
+            return True
+        self.post_volume = True                                   # capture follows the app volume: keep the floor and boost
+        self.capture.gain = min(40.0, orig / FLOOR)
+        await asyncio.sleep(0.9)
+        raw = self.capture.recent_peak(0.8)
+        if raw >= max(20, 0.3 * pre_peak * FLOOR / orig):
+            self.duck_vol = FLOOR
+            self._save_profile()
+            log(f"Windows applies this app's volume before capture: keeping it at {int(FLOOR * 100)}% and boosting x{self.capture.gain:.0f}")
+            return True
+        self.post_volume = None
         await self._give_up("Turning the music app down also silences the capture, so it would play twice; using your speakers.")
         return False
 
+    async def _dump_sessions(self):
+        try:
+            rows = []
+            for pid, _, pk in (await self._sessions())[:8]:
+                try:
+                    name = psutil.Process(pid).name()
+                except psutil.Error:
+                    name = "?"
+                rows.append(f"{name}#{pid} {pk:.2f}")
+            log("audio sessions: " + "; ".join(rows))
+        except Exception:
+            pass
+
     async def _give_up(self, why):
+        await self._dump_sessions()
         self.fallback = why
         self.fail_streak += 1
         log(why)
