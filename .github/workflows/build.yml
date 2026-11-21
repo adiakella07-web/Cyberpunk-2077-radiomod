@@ -22,20 +22,21 @@ jobs:
           git -C launcher/RED4ext.SDK checkout a34f0ad0a9e4f37cbe1fe001e4ff68c2949d0665
           cmake -S launcher -B launcher/build -A x64
           cmake --build launcher/build --config Release
+      - name: Fetch librespot source (pinned)
+        run: |
+          git clone https://github.com/librespot-org/librespot librespot-src
+          git -C librespot-src checkout 15e02e86c72d96dd39d548e3749f00abe39ffdde
       - name: Cache librespot build
         id: ls-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: librespot-src/target/release/librespot.exe
           key: librespot-win-15e02e8
-      - name: Build librespot (Spotify Connect receiver for standalone mode)
+      - name: Build librespot (Spotify Connect receiver for the optional add-on)
         if: steps.ls-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         timeout-minutes: 30
-        run: |
-          git clone https://github.com/librespot-org/librespot librespot-src
-          git -C librespot-src checkout 15e02e86c72d96dd39d548e3749f00abe39ffdde
-          cargo build --release --manifest-path librespot-src/Cargo.toml --no-default-features --features "native-tls with-libmdns"
+        run: cargo build --release --manifest-path librespot-src/Cargo.toml --no-default-features --features "native-tls with-libmdns"
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with: { dotnet-version: "10.0.x" }
       - name: Build custom station icon (texture + archive)
@@ -75,7 +76,7 @@ jobs:
         working-directory: companion
         run: |
           python -m pip install -r requirements.txt pyinstaller
-          python -m PyInstaller --noconfirm --onefile --windowed --name NeonDial --add-data "neondial/web;neondial/web" --collect-all webview --collect-all pythonnet --collect-all clr_loader run.py
+          python -m PyInstaller --noconfirm --onedir --windowed --name NeonDial --add-data "neondial/web;neondial/web" --collect-all webview --collect-all pythonnet --collect-all clr_loader run.py
       - name: Self-test the packaged app
         shell: pwsh
         env:
@@ -86,10 +87,31 @@ jobs:
           if (-not (Test-Path selftest.txt)) { Write-Output "::error::selftest produced no report (exe crashed at startup)"; exit 1 }
           $t = (Get-Content selftest.txt) -join " | "
           if ($t -match "SELFTEST OK") { Write-Output "::notice::$t" } else { Write-Output "::error::$t"; exit 1 }
-      - name: Package for Vortex
-        run: python tools/make_vortex_zip.py companion/dist/NeonDial.exe launcher/build/Release/NeonDial.dll launcher/build/Release/NeonDialAudio.exe NeonDial-vortex.zip librespot-src/target/release/librespot.exe pack/out/NeonDial.archive
+      - name: Collect third-party licences
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force licenses | Out-Null
+          python -m venv licvenv
+          licvenv\Scripts\python -m pip install -r companion/requirements.txt pip-licenses
+          licvenv\Scripts\pip-licenses --from=mixed --with-license-file --no-license-path --with-notice-file --format=plain-vertical --ignore-packages pip-licenses prettytable wcwidth pip setuptools --output-file licenses/PYTHON_PACKAGES_LICENSES.txt
+          $base = python -c "import sys;print(sys.base_prefix)"
+          Copy-Item "$base\LICENSE.txt" licenses/PYTHON-LICENSE.txt
+          Copy-Item launcher/RED4ext.SDK/LICENSE.md licenses/RED4ext-SDK-LICENSE.txt
+          Copy-Item THIRD_PARTY_NOTICES.md licenses/THIRD_PARTY_NOTICES.md
+          Copy-Item librespot-src/LICENSE licenses/librespot-LICENSE.txt -ErrorAction SilentlyContinue
+          cargo metadata --manifest-path librespot-src/Cargo.toml --format-version 1 --filter-platform x86_64-pc-windows-msvc | python tools/rust_licenses.py | Out-File -Encoding utf8 licenses/librespot-dependencies.txt
+          Get-ChildItem licenses | ForEach-Object { Write-Output "$($_.Name) $($_.Length)" }
+      - name: Package (main file and optional Spotify add-on)
+        shell: pwsh
+        run: |
+          $ver = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "dev" }
+          $args = @("tools/make_packages.py","--version",$ver,"--dist","companion/dist/NeonDial","--dll","launcher/build/Release/NeonDial.dll","--helper","launcher/build/Release/NeonDialAudio.exe","--licenses","licenses","--out","out")
+          if (Test-Path pack/out/NeonDial.archive) { $args += @("--icon","pack/out/NeonDial.archive") }
+          if (Test-Path librespot-src/target/release/librespot.exe) { $args += @("--librespot","librespot-src/target/release/librespot.exe") }
+          python @args
+          Get-ChildItem out | ForEach-Object { Write-Output "$($_.Name) $($_.Length)" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with: { name: NeonDial-vortex, path: NeonDial-vortex.zip }
+        with: { name: NeonDial-release, path: out/*.zip }
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
@@ -98,7 +120,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with: { name: NeonDial-vortex }
+        with: { name: NeonDial-release }
       - name: Publish release
-        run: gh release create "${{ github.ref_name }}" NeonDial-vortex.zip --repo "${{ github.repository }}" --title "Neon Dial ${{ github.ref_name }}" --notes "Add NeonDial-vortex.zip to Vortex. Requires Cyber Engine Tweaks, RED4ext and RadioExt. See SECURITY.md for what is stored and what is not."
+        run: |
+          gh release create "${{ github.ref_name }}" *.zip --repo "${{ github.repository }}" --title "Neon Dial ${{ github.ref_name }}" --notes "Main file - NeonDial-${{ github.ref_name }}.zip (install with Vortex). Optional - NeonDial-SpotifyAddon-${{ github.ref_name }}.zip adds Standalone Spotify mode. Requires Cyber Engine Tweaks, RED4ext and RadioExt. AI disclosure, licences and privacy are documented in the repository (docs/NEXUS_SUBMISSION.md, THIRD_PARTY_NOTICES.md, SECURITY.md)."
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }

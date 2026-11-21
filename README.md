@@ -4,9 +4,13 @@
 entry in the in-game radio list. Open Apple Music (or Spotify) on your PC, load any playlist, tune to the station and it plays.
 Tune away and it pauses. No accounts, API keys or tokens.
 
+> **AI disclosure:** the code, build scripts and documentation of this project were written by an AI assistant (Claude, by Anthropic) under the repository owner's direction and tested by the owner in the game.
+> Licences of everything it uses: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Publishing notes (Nexus Mods): [docs/NEXUS_SUBMISSION.md](docs/NEXUS_SUBMISSION.md).
+
 ## Install (players)
 1. Install the prerequisites with Vortex: **Cyber Engine Tweaks**, **RED4ext**, **RadioExt**.
-2. Download `NeonDial-vortex.zip` from the [Releases](../../releases) page and add it to Vortex (drag it in, or *Install from file*), then enable and deploy.
+2. Download `NeonDial-<version>.zip` from the [Releases](../../releases) page and add it to Vortex (drag it in, or *Install from file*), then enable and deploy.
+   Optional: also add `NeonDial-SpotifyAddon-<version>.zip` for Standalone Spotify mode (it contains the unofficial Spotify receiver, librespot).
 3. Open Apple Music/Spotify, start a playlist, launch the game from Vortex, tune to **Neon Dial FM**.
 
 
@@ -64,7 +68,7 @@ Early release. Verified in development: the stream, tune-in/out logic and live-a
 
 ## Developing
 - `companion/`: Python companion (`python companion/run.py --provider demo` plays a test tone when you tune in; needs Python 3.11+).
-- `launcher/`: C++ RED4ext plugin. `vortex_package/`: files shipped in the zip. `tools/make_vortex_zip.py`: packager.
+- `launcher/`: C++ RED4ext plugin. `vortex_package/`: files shipped in the zip. `tools/make_packages.py`: packager (builds the main file and the optional Spotify add-on).
 - Releases are built by GitHub Actions: push a tag like `v1.0.0`.
 
 ## Credits

@@ -48,7 +48,7 @@ class StandaloneProvider(Provider):
         self.title = ""
         self._wiping = False
         self.status = ("waiting: in the Spotify app (same Wi-Fi) pick the device \"Neon Dial FM\"; the first pick also logs it in"
-                       if self.exe else "librespot.exe not found next to NeonDial.exe")
+                       if self.exe else "the optional Spotify add-on isn't installed: add NeonDial-SpotifyAddon.zip (it contains librespot.exe) with Vortex")
         self.proc = None
         self._task = None
         self._opened = False
