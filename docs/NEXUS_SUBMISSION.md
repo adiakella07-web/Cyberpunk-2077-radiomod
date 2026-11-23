@@ -7,6 +7,16 @@ will approve a mod or grant Donation Points. Read the official pages yourself (t
 - AI policy: https://help.nexusmods.com/article/180-ai-policy-changes-2026
 - CD PROJEKT RED fan content guidelines: https://cdprojektred.com/fan-content/
 
+## 0. The audit list you pasted from Gemini, item by item
+| Item | What was done |
+|---|---|
+| 1. librespot.exe: remove or audit | It is **not leftover**: it powers the optional "Standalone Spotify" mode, so it was kept but moved into a separate **optional add-on file**; the main file no longer contains it. Licence checked: MIT (plus its Rust crates, listed in `licenses/librespot-dependencies.txt`). Caveat that stays: it is an unofficial Spotify client, which may conflict with Spotify's terms, so you decide whether to publish the add-on. The "Apple Music radio mod concept" is not contradicted: Spotify is a second, optional source. |
+| 2. Audit the binaries | Inventory of every bundled component and licence: `THIRD_PARTY_NOTICES.md` + the generated `licenses/` folder + per-file `MANIFEST.md`. The code is original (AI-written, disclosed); third parties are open-source with licences shipped. The LGPL library (lameenc) is kept replaceable (folder build instead of one packed .exe, which also lowers antivirus false positives). Debug/test code is not shipped (the `--selftest` switch is the only built-in test hook). Audio/media control uses official Windows APIs only (media session controls, audio-capture API, mixer volume); no credential scraping and no DRM bypass (see README.txt in the mod). |
+| 3. NeonDial.archive, init.lua, metadata.json | The archive holds exactly two files: our icon texture (drawn by `assets/icon/make_icon.py`) and its atlas. **No base-game assets, no restricted logos.** init.lua and metadata.json contain no secrets or credentials (CI scans for that on every build) and no uncredited third-party snippets (the only external things referenced are RadioExt's and the game's own public function names). |
+| 4. README.txt too small | Rewritten: components, requirements, how logins/audio work, antivirus note, uninstall, third-party software, AI disclosure. |
+| 5. Clean packaging + verification | `tools/make_packages.py` builds the files from a pinned, public build; `tools/verify_release.py` verifies them; `docs/PRE_UPLOAD_CHECKLIST.md` is the manual checklist; each zip carries its own manifest. |
+| DP rule summary | Matches what I found on Nexus's pages; the age/account conditions are as quoted in your paste: confirm on the official page. |
+
 ## 1. What is already done in the repository
 | Requirement (as I read Nexus's pages) | Status |
 |---|---|

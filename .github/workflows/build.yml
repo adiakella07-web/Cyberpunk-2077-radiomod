@@ -83,7 +83,7 @@ jobs:
           NEONDIAL_AUDIO_HELPER: ${{ github.workspace }}\launcher\build\Release\NeonDialAudio.exe
           NEONDIAL_LIBRESPOT: ${{ github.workspace }}\librespot-src\target\release\librespot.exe
         run: |
-          Start-Process -FilePath companion\dist\NeonDial.exe -ArgumentList "--selftest","selftest.txt" -Wait
+          Start-Process -FilePath companion\dist\NeonDial\NeonDial.exe -ArgumentList "--selftest","selftest.txt" -Wait
           if (-not (Test-Path selftest.txt)) { Write-Output "::error::selftest produced no report (exe crashed at startup)"; exit 1 }
           $t = (Get-Content selftest.txt) -join " | "
           if ($t -match "SELFTEST OK") { Write-Output "::notice::$t" } else { Write-Output "::error::$t"; exit 1 }
@@ -110,6 +110,9 @@ jobs:
           if (Test-Path librespot-src/target/release/librespot.exe) { $args += @("--librespot","librespot-src/target/release/librespot.exe") }
           python @args
           Get-ChildItem out | ForEach-Object { Write-Output "$($_.Name) $($_.Length)" }
+      - name: Verify the release files (manifest, licences, no secrets, expected executables only)
+        shell: pwsh
+        run: python tools/verify_release.py (Get-ChildItem out -Filter *.zip | ForEach-Object { $_.FullName })
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: { name: NeonDial-release, path: out/*.zip }
   release:

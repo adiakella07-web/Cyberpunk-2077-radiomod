@@ -3,6 +3,11 @@
 //   NeonDialAudio.exe capture <pid> [exclude]   raw PCM (S16LE, 44.1 kHz, stereo) of that app (and its child processes)
 //                                               to stdout, via Windows process loopback. Needs Windows 10 2004+.
 //   NeonDialAudio.exe volume <0..1> <pid>...    set the Windows mixer volume of those apps' sessions; prints "<pid> <previous>"
+//                                               (a negative value only reads the current volumes)
+//   While capturing, commands can be sent on stdin, one per line:
+//     gain <factor>                              multiply the captured audio
+//     duck <volume> <factor> <pid>...            set those apps' volume AND the gain at the same instant, so turning an app down
+//                                               while boosting the capture back is seamless (no dip, no spike)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -17,12 +22,51 @@
 #include <io.h>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
+#include <atomic>
 #include <cwchar>
 #include <set>
+#include <sstream>
+#include <string>
+#include <thread>
 #include <vector>
 
 namespace
 {
+int SetVolume(float volume, const std::set<DWORD>& pids, bool print);
+
+std::atomic<float> g_gain{1.0f};
+
+// Reads commands from stdin (see the header comment). Runs for as long as the capture runs.
+void CommandThread()
+{
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    char line[512];
+    while (fgets(line, sizeof(line), stdin))
+    {
+        std::istringstream in(line);
+        std::string cmd;
+        in >> cmd;
+        if (cmd == "gain")
+        {
+            float g = 1.0f;
+            if (in >> g)
+                g_gain.store(std::clamp(g, 0.0f, 64.0f));
+        }
+        else if (cmd == "duck")
+        {
+            float vol = 1.0f, g = 1.0f;
+            in >> vol >> g;
+            std::set<DWORD> pids;
+            unsigned long pid;
+            while (in >> pid)
+                pids.insert(static_cast<DWORD>(pid));
+            SetVolume(vol, pids, false);       // volume and gain change back to back, in this one thread
+            g_gain.store(std::clamp(g, 0.0f, 64.0f));
+        }
+    }
+}
+
 class ActivateHandler : public IActivateAudioInterfaceCompletionHandler, public IAgileObject
 {
     LONG ref_ = 1;
@@ -130,6 +174,8 @@ int Capture(DWORD pid, bool exclude, DWORD parentPid)
 
     // If the program that started us is gone, quit (nobody is reading our output any more).
     HANDLE parent = parentPid ? OpenProcess(SYNCHRONIZE, FALSE, parentPid) : nullptr;
+    std::thread(CommandThread).detach();
+    std::vector<BYTE> scaled;
 
     std::vector<BYTE> silence;
     for (;;)
@@ -160,7 +206,19 @@ int Capture(DWORD pid, bool exclude, DWORD parentPid)
                 ok = fwrite(silence.data(), 1, bytes, stdout) == bytes;
             }
             else
-                ok = fwrite(data, 1, bytes, stdout) == bytes;
+            {
+                const float g = g_gain.load();
+                if (g != 1.0f)
+                {
+                    scaled.assign(data, data + bytes);
+                    auto* samples = reinterpret_cast<int16_t*>(scaled.data());
+                    for (size_t i = 0; i < bytes / 2; ++i)
+                        samples[i] = static_cast<int16_t>(std::clamp(samples[i] * g, -32768.0f, 32767.0f));
+                    ok = fwrite(scaled.data(), 1, bytes, stdout) == bytes;
+                }
+                else
+                    ok = fwrite(data, 1, bytes, stdout) == bytes;
+            }
             capture->ReleaseBuffer(frames);
             if (!ok)
                 return 0; // parent closed the pipe: we're done
@@ -214,7 +272,7 @@ int ListSessions()
     return 0;
 }
 
-int SetVolume(float volume, const std::set<DWORD>& pids)
+int SetVolume(float volume, const std::set<DWORD>& pids, bool print)
 {
     IMMDeviceEnumerator* en = nullptr;
     if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
@@ -248,8 +306,10 @@ int SetVolume(float volume, const std::set<DWORD>& pids)
                 {
                     float prev = 1.0f;
                     sv->GetMasterVolume(&prev);
-                    sv->SetMasterVolume(volume, nullptr);
-                    printf("%lu %.3f\n", static_cast<unsigned long>(pid), prev);
+                    if (volume >= 0.0f)
+                        sv->SetMasterVolume(volume, nullptr);
+                    if (print)
+                        printf("%lu %.3f\n", static_cast<unsigned long>(pid), prev);
                     sv->Release();
                 }
             }
@@ -257,7 +317,8 @@ int SetVolume(float volume, const std::set<DWORD>& pids)
         }
         ctl->Release();
     }
-    fflush(stdout);
+    if (print)
+        fflush(stdout);
     return 0;
 }
 } // namespace
@@ -285,7 +346,7 @@ int wmain(int argc, wchar_t** argv)
         std::set<DWORD> pids;
         for (int i = 3; i < argc; ++i)
             pids.insert(static_cast<DWORD>(wcstoul(argv[i], nullptr, 10)));
-        return SetVolume(static_cast<float>(wcstod(argv[2], nullptr)), pids);
+        return SetVolume(static_cast<float>(wcstod(argv[2], nullptr)), pids, true);
     }
     fprintf(stderr, "usage: NeonDialAudio sessions | capture <pid> [exclude] | volume <0..1> <pid>...\n");
     return 1;
