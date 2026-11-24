@@ -14,7 +14,7 @@ Neon Dial plays your own music, so it is built so that **no login, token or acco
 - **Sign out and erase saved logins** (in the in-game panel) deletes both of the above and clears the browser session.
 
 ## What can't leak
-- **Logs and the in-game panel** are scrubbed before anything is stored or shown: account names, e-mail addresses, links, long tokens, cookies/passwords and your Windows user name are replaced with placeholders (safe to screenshot).
+- **Logs and the in-game panel** are scrubbed before anything is stored or shown: account names, e-mail addresses, links, long tokens, cookies/passwords, **every file path** (including your Windows user name and the game folder) are replaced with placeholders, in the program and again in the in-game panel, so it is safe to screenshot or to use the panel's "Copy log to clipboard" button.
 - **Nothing is uploaded.** There is no telemetry or analytics. The only outbound connections are the ones Spotify's receiver and Apple's website make to their own servers, exactly as their own apps would.
 - **Network exposure:** everything listens on `127.0.0.1` only. The audio stream refuses browsers and other web pages (they always send headers the game's audio engine does not) and any request whose host isn't local, which blocks "a website you visit talking to your PC" and DNS-rebinding tricks.
   The optional browser control page is **off by default** (the in-game panel replaces it); if you turn it on (`"web_panel": true` in `%USERPROFILE%\.neondial\settings.json`) it also rejects foreign origins, non-JSON posts and unexpected hosts.

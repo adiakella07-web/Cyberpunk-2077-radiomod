@@ -10,6 +10,7 @@ local cfg = { physics = true, near = 4.0, far = 45.0, cabin = 0.18, dedupe = tru
 local ui = { open = false, status = {}, log = {}, connected = false, lastRead = 0, tick = 0 }
 local lastVol = {}
 local lastApply = {}
+local forceApply = false
 
 local MODES = { "system", "standalone", "apple-standalone" }
 local MODE_LABELS = { "Music app (Apple Music / Spotify must be open)", "Standalone Spotify (no app, Premium)", "Standalone Apple Music (no app)" }
@@ -129,6 +130,23 @@ local function updateVolumes()
             lastApply[ch] = nil
         end
     end
+
+    -- The car / pocket radio: RadioExt only refreshes this volume when the settings-menu slider moves (and reads it before
+    -- the change lands). The A / D volume control on the radio screen changes the same setting, so follow it ourselves.
+    if cfg.volfix and ownOnMain then
+        local mult = (mounted and setting("CarRadioVolume") or setting("RadioportVolume")) / 100
+        local vol = (station.volume or 1.0) * mult * 0.4
+        local now = os.clock()
+        if forceApply or not lastVol[-1] or math.abs(lastVol[-1] - vol) > 0.002 or now - (lastApply[-1] or 0) > 1.0 then
+            lastVol[-1] = vol
+            lastApply[-1] = now
+            RadioExt.SetVolume(-1, vol)
+        end
+    else
+        lastVol[-1] = nil
+        lastApply[-1] = nil
+    end
+    forceApply = false
 end
 
 ---------------------------------------------------------------- now playing in the game's radio UI
@@ -187,6 +205,30 @@ local function updateNowPlaying()
     if popupCtrl and text and text ~= shownText and stationIsOurs() then
         if applyPopup(popupCtrl, text) then shownText = text else popupCtrl = nil end
     end
+end
+
+---------------------------------------------------------------- activity log: scrub + copy
+local function scrub(line)
+    line = line:gsub("%a:\\[^%s\"'<>|]*", "<path>")      -- never show or copy a file path
+    line = line:gsub("\\\\[%w%.%$_%-]+\\[^%s]*", "<path>")
+    return line
+end
+
+local function reportText()
+    local s = ui.status
+    local out = {
+        "Neon Dial report",
+        "mode: " .. tostring(s.mode or "?"),
+        "audio path: " .. scrub(tostring(s.path or "?")),
+        "tuned in: " .. ((s.tuned == "1") and "yes" or "no"),
+        "texture: " .. tostring(s.texture or "off"),
+        "note: " .. scrub(tostring(s.note or "")),
+        string.format("game radio volume setting: car %s%%, radioport %s%%", tostring(setting("CarRadioVolume")), tostring(setting("RadioportVolume"))),
+        "",
+        "activity:",
+    }
+    for _, l in ipairs(ui.log) do out[#out + 1] = scrub(l) end
+    return table.concat(out, "\n")
 end
 
 ---------------------------------------------------------------- UI
@@ -253,11 +295,18 @@ local function draw()
         nv, used = ImGui.SliderFloat("Volume inside a car", cfg.cabin, 0.0, 1.0, "%.2f")
         if used then cfg.cabin = nv; saveSettings() end
     end
-    if #ui.log > 0 then
-        ImGui.Separator()
-        ImGui.Text("Activity")
-        for i = math.max(1, #ui.log - 7), #ui.log do ImGui.TextWrapped(ui.log[i]) end
+    ImGui.Separator()
+    ImGui.Text(string.format("Game radio volume: car %s%%  radioport %s%%", tostring(setting("CarRadioVolume")), tostring(setting("RadioportVolume"))))
+    ImGui.Text("Activity")
+    if ImGui.Button("Copy log to clipboard") then
+        local ok = pcall(function() ImGui.SetClipboardText(reportText()) end)
+        ui.copiedAt = ok and os.clock() or nil
     end
+    if ui.copiedAt and os.clock() - ui.copiedAt < 3 then
+        ImGui.SameLine()
+        ImGui.Text("Copied (no file paths or account details included)")
+    end
+    for i = math.max(1, #ui.log - 7), #ui.log do ImGui.TextWrapped(scrub(ui.log[i])) end
     ImGui.End()
 end
 
@@ -268,6 +317,8 @@ registerForEvent("onInit", function()
         ObserveAfter("VehicleRadioPopupGameController", "SetTrackName", function(this) pending.popup = this end)
         ObserveAfter("VehicleSummonWidgetGameController", "TryShowVehicleRadioNotification", function(this) pending.notif = this end)
         ObserveAfter("VehicleRadioPopupGameController", "OnUninitialize", function() popupCtrl = nil; shownText = nil end)
+        -- A / D on the radio screen: re-apply the volume right after the game has changed it
+        ObserveAfter("RadioVolumeSettingsController", "ChangeValue", function() forceApply = true end)
     end)
     print("[NeonDial] ready. Open the CET overlay to control it; station: " .. STATION)
 end)

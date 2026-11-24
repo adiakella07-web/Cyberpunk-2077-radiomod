@@ -39,7 +39,7 @@ No developer account or tokens, it is just you logged in on the website. The pag
 ## Controls and the in-game panel
 No web page needed: open the **Cyber Engine Tweaks overlay** (its usual hotkey, default ~) and use the **Neon Dial** window: switch mode,
 prev/next, show the Apple sign-in window (first time only), pick a sound texture, and tune the radio physics. Hotkeys for next/previous
-track can be bound in CET's bindings. Everything else is the normal in-game radio: station wheel, radio on/off, volume.
+track can be bound in CET's bindings. Everything else is the normal in-game radio: station wheel, radio on/off, and the volume control on the radio screen (A / D): Neon Dial follows it live.
 (An optional browser control page exists but is switched off by default, see SECURITY.md.)
 
 ## Station look and now-playing

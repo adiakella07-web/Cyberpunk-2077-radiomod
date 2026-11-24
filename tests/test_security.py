@@ -21,6 +21,9 @@ def test_redaction_hides_accounts_and_secrets():
         "key 0123456789abcdef0123456789abcdef0123": "0123456789abcdef",
         "C:\\Users\\Some Person\\AppData\\x": "Some Person",
         "cookie: sessionid=XYZ": "XYZ",
+        "loaded D:\\Games\\Cyberpunk 2077\\bin\\x64\\plugins\\x.dll ok": "Cyberpunk",
+        "file \\\\server\\share\\music\\a.mp3": "share",
+        "path /home/someone/.neondial/x": "someone",
     }
     for text, secret in cases.items():
         assert secret not in redact(text), text

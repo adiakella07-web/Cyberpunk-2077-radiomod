@@ -42,6 +42,7 @@ EXES = (("applemusic", ["applemusic.exe"]), ("itunes", ["itunes.exe"]),
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 STATE_FILE = DATA_DIR / "volume_state.json"
 PROFILE_FILE = DATA_DIR / "capture_profile.json"   # what this PC does with an app's volume when capturing (learned once)
+SESSION_LABELS = ("app audio session", "active audio session")
 FLOOR = 0.04                                        # the app's own volume while it is being captured (-28 dB)
 AUDIBLE = 0.01          # session meter level (0-1) that counts as 'the app is making sound'
 REAL = 150              # capture level (of 32767) that counts as real audio; level 1-2 is just Windows' dither noise
@@ -199,10 +200,9 @@ class SystemProvider(Provider):
         self.we_started = False
         self.fallback = None
         self.fail_streak = 0
-        self.good = None                                  # label of the capture strategy that worked last
         self.duck_vol = 0.0                               # how far the app's own volume is turned down (learned)
         self.learned = False
-        self.post_volume, self.profile_gain = self._load_profile()   # True: capture follows the app's volume (boost needed); None: unknown
+        self.post_volume, self.profile_gain, self.good = self._load_profile()   # what worked on this PC before
         self.strategy = None
         self.orig = None
         self.vol_pids = set()
@@ -271,14 +271,17 @@ class SystemProvider(Provider):
             d = json.loads(PROFILE_FILE.read_text())
             pv = d.get("post_volume")
             g = d.get("gain")
+            st = d.get("strategy")
             return (pv if isinstance(pv, bool) else None,
-                    float(g) if isinstance(g, (int, float)) and 1.0 <= g <= 64.0 else None)
+                    float(g) if isinstance(g, (int, float)) and 1.0 <= g <= 64.0 else None,
+                    st if st in SESSION_LABELS + ("app main process", "everything except the game") else None)
         except Exception:
-            return None, None
+            return None, None, None
 
     def _save_profile(self):
         try:
-            PROFILE_FILE.write_text(json.dumps({"post_volume": self.post_volume, "gain": self.profile_gain}))
+            PROFILE_FILE.write_text(json.dumps({"post_volume": self.post_volume, "gain": self.profile_gain,
+                                                "strategy": self.good}))
         except OSError:
             pass
 
@@ -329,6 +332,27 @@ class SystemProvider(Provider):
             await self._volume(vol, pids)
             if cap:
                 cap.gain = gain
+
+    def _known_gain(self):
+        if not self.post_volume:
+            return 1.0
+        return min(40.0, self.profile_gain or max(self.orig or 1.0, 0.05) / FLOOR)
+
+    async def _preduck(self, pids):
+        """Known PC: turn the app down the moment its mixer session appears, before the capture even starts, so there is
+        no stretch where the music plays loudly through the speakers while the game path is being set up."""
+        prev = await self._volume(-1.0, pids)
+        if not prev:
+            return False
+        if self.orig is None:
+            best = max(prev.values())
+            self.orig = best if best > 0.05 else 1.0
+            log(f"turning the music app's own volume down (was {self.orig:.2f})")
+        self.vol_pids |= set(prev)
+        self._save_state()
+        self.duck_vol = FLOOR if self.post_volume else 0.0
+        await self._volume(self.duck_vol, set(prev))
+        return True
 
     async def _duck(self, pids, vol=None, gain=None):
         """(Re)apply the 'turned down' state to every session of the app, keeping the boost matched."""
@@ -489,10 +513,14 @@ class SystemProvider(Provider):
         """Find a capture strategy that really delivers audio, then silence the app's speakers."""
         t0 = time.monotonic()
         tried, cur, cur_start, audible_since = set(), None, 0.0, None
+        preducked = False
         success = None
         while self.tuned and time.monotonic() - t0 < 40:
             cands, duck_pids, aud_mine, aud_any = await self._candidates(exes)
             if cur is None:
+                if self.good in SESSION_LABELS and not any(c[0] == self.good for c in cands) and time.monotonic() - t0 < 8:
+                    await asyncio.sleep(0.1)               # the app's mixer session isn't there yet: wait for it rather than guess
+                    continue
                 nxt = next((c for c in cands if (c[1], c[2]) not in tried), None)
                 if nxt is None:
                     if aud_any and time.monotonic() - t0 > 6:
@@ -501,7 +529,12 @@ class SystemProvider(Provider):
                     continue
                 cur = nxt
                 tried.add((cur[1], cur[2]))
+                preducked = False
+                if self.post_volume is not None and cur[0] in SESSION_LABELS:
+                    preducked = await self._preduck(duck_pids)
                 await self.capture.start(cur[1], cur[2])
+                if preducked:
+                    await self._atomic(self.duck_vol, self._known_gain(), set(self.vol_pids))
                 cur_start, audible_since = time.monotonic(), None
                 log(f"trying capture: {cur[0]} (pid {cur[1]}, {cur[2]})")
             if self.capture.last_audio > cur_start and self.capture.real_chunks >= 5:
@@ -509,12 +542,16 @@ class SystemProvider(Provider):
                 break
             if not self.capture.running:
                 log(f"capture '{cur[0]}' stopped unexpectedly")
+                if preducked:
+                    await self._restore()
                 cur = None
                 continue
             if aud_mine or aud_any:
                 audible_since = audible_since or time.monotonic()
-                if time.monotonic() - audible_since > 2.5:
+                if time.monotonic() - audible_since > 1.2:
                     log(f"capture '{cur[0]}' heard nothing real (loudest level {self.capture.max_peak}) although the app is making sound")
+                    if preducked:
+                        await self._restore()
                     cur = None
                     continue
             await asyncio.sleep(0.25)
@@ -529,6 +566,7 @@ class SystemProvider(Provider):
         if not await self._settle(duck_pids, pre_peak):
             return
         self.good, self.strategy, self.fail_streak, self.learned = cur[0], cur[0], 0, True
+        self._save_profile()                               # next launch goes straight to what works here
         log("game radio mix active" + (f" (matched boost x{self.capture.gain:.0f})" if self.capture.gain != 1.0 else ""))
         t_ok, last_real, tick = time.monotonic(), time.monotonic(), 0
         while self.tuned:                                  # keep it turned down (new mixer sessions!) and the capture alive

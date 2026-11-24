@@ -12,6 +12,7 @@ _URL = re.compile(r"(?i)\b(https?|spotify|file)://[^\s>]+|\bspotify:(user|playli
 _TOKEN = re.compile(r"\b[A-Za-z0-9_\-]{28,}\b")
 _KV = re.compile(r"(?i)\b(token|secret|password|passwd|cookie|authorization|bearer|code|key)\b\s*[:=]\s*\S+")
 _HOME = re.compile(r"(?i)[A-Z]:\\Users\\[^\\]+")
+_PATH = re.compile(r"(?i)(?:\b[A-Z]:\\|\\\\[\w.$-]+\\)(?:[^\\/:*?\"<>|\r\n]+\\)*[^\\/:*?\"<>|\s]*|(?:/home|/Users)/[^\s]+")
 
 
 def redact(msg: str) -> str:
@@ -21,6 +22,7 @@ def redact(msg: str) -> str:
     msg = _URL.sub("<link>", msg)
     msg = _TOKEN.sub("<hidden>", msg)
     msg = _HOME.sub(r"<user folder>", msg)
+    msg = _PATH.sub("<path>", msg)
     return msg
 
 
