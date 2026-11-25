@@ -9,18 +9,22 @@ Nothing is assumed: after pressing play we find the process that is really makin
 strategies in turn, and only keep one that is verified to deliver audio. If none works (or turning the app
 down silences the capture) we put the volume back and play through the speakers.
 """
-import array
 import asyncio
 import collections
 import json
+import math
 import os
 import pathlib
 import subprocess
 import sys
 import time
+import warnings
 
-import numpy as np
 import psutil
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    import audioop
 
 from ..config import DATA_DIR
 from ..log import log
@@ -122,7 +126,7 @@ class Capture:
 
     def window_rms(self, t0, t1):
         vals = [ms for t, _, ms in self._peaks if t0 <= t <= t1]
-        return float(np.sqrt(np.mean(vals))) if vals else 0.0
+        return math.sqrt(sum(vals) / len(vals)) if vals else 0.0
 
     @property
     def running(self):
@@ -159,9 +163,8 @@ class Capture:
                 continue
             now = time.monotonic()
             if data.count(0) != n:
-                a = np.frombuffer(data, dtype="<i2")
-                peak = int(max(a.max(), -int(a.min())))
-                self._peaks.append((now, peak, float(np.mean(a.astype(np.float32) ** 2))))
+                peak = audioop.max(data, 2)                   # loudest sample (absolute)
+                self._peaks.append((now, peak, float(audioop.rms(data, 2)) ** 2))
                 self.max_peak = max(self.max_peak, peak)
                 if peak >= REAL:                       # tiny values are dither noise, not music
                     self.last_audio = now

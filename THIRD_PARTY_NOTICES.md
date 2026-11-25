@@ -7,8 +7,10 @@ Neon Dial's own code is MIT licensed (see `LICENSE`). It ships with, or was buil
 | Component | Licence | Notes |
 |---|---|---|
 | Python runtime | PSF-2.0 | `licenses/PYTHON-LICENSE.txt` |
-| aiohttp and its dependencies, numpy, psutil, pywebview, pythonnet, clr-loader, winrt-* packages | Apache-2.0 / BSD-3-Clause / MIT (per package) | exact list and full texts: `licenses/PYTHON_PACKAGES_LICENSES.txt` |
+| aiohttp and its dependencies, psutil, pywebview, pythonnet, clr-loader, winrt-* packages | Apache-2.0 / BSD-3-Clause / MIT (per package) | exact list and full texts: `licenses/PYTHON_PACKAGES_LICENSES.txt` |
 | **lameenc** (wraps the LAME MP3 encoder) | **LGPL-3.0-or-later** | see below |
+| OpenSSL (`libcrypto`/`libssl`, used by Python's ssl module) | Apache-2.0 | shipped inside `_internal` |
+| Microsoft Visual C++ / Universal C runtime DLLs | Microsoft redistributable terms | needed by Python, redistributable by licence |
 | PyInstaller bootloader (packs the program) | GPL-2.0 with the PyInstaller bootloader exception | the exception lets the packed program use any licence |
 | RED4ext SDK headers (compiled into `NeonDial.dll`) | MIT | `licenses/RED4ext-SDK-LICENSE.txt` |
 

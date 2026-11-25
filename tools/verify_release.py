@@ -43,6 +43,9 @@ def check(path):
             elif hashlib.sha256(z.read(n)).hexdigest() != listed[n]:
                 problems.append(f"{path}: {n} does not match the manifest")
     for n in names:
+        low = n.lower()
+        if low.endswith(".pdb") or "/numpy" in low or "/setuptools" in low or "/pkg_resources" in low or "platforms/android" in low or "platforms/cocoa" in low or "platforms/gtk" in low or "platforms/qt" in low or "x86.dll" in low:
+            problems.append(f"{path}: file that should have been pruned: {n}")
         base = n.rsplit("/", 1)[-1]
         if n.lower().endswith(".exe") and base not in ALLOWED_EXE:
             problems.append(f"{path}: unexpected executable {n}")
