@@ -104,7 +104,12 @@ jobs:
           cargo metadata --manifest-path librespot-src/Cargo.toml --format-version 1 --filter-platform x86_64-pc-windows-msvc | python tools/rust_licenses.py | Out-File -Encoding utf8 licenses/librespot-dependencies.txt
           Get-ChildItem licenses | ForEach-Object { Write-Output "$($_.Name) $($_.Length)" }
       - name: Cross-check bundled packages against the licence notices
-        run: python tools/check_licenses.py companion/dist/NeonDial licenses/PYTHON_PACKAGES_LICENSES.txt
+        shell: pwsh
+        run: |
+          $out = (python tools/check_licenses.py companion/dist/NeonDial licenses/PYTHON_PACKAGES_LICENSES.txt 2>&1 | Out-String)
+          $code = $LASTEXITCODE
+          $flat = ($out -replace "\s*\r?\n", " | ")
+          if ($code -ne 0) { Write-Output "::error::LICENCES $flat"; exit 1 } else { Write-Output "::notice::LICENCES $flat" }
       - name: Package (main file and optional Spotify add-on)
         shell: pwsh
         run: |
