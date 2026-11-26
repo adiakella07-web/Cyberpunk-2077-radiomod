@@ -23,7 +23,19 @@ for meta in sorted(internal.glob("*.dist-info/METADATA")):
     name, ver = msg.get("Name", meta.parent.name), msg.get("Version", "?")
     lic = " | ".join(filter(None, [msg.get("License-Expression"), msg.get("License")] +
                             [c for c in (msg.get_all("Classifier") or []) if c.startswith("License")]))
-    seen.append(f"{name} {ver}: {lic[:80] or 'NO LICENCE METADATA'}")
+    if not lic.strip():                                   # some packages only ship the licence as a file: read its text instead
+        for f in list(meta.parent.glob("licenses/*")) + list(meta.parent.glob("LICENSE*")):
+            if f.is_file():
+                text = f.read_text(errors="replace")[:4000]
+                if re.search(r"permission is hereby granted, free of charge", text, re.I):
+                    lic = "MIT (from licence file)"
+                elif re.search(r"apache license", text, re.I):
+                    lic = "Apache-2.0 (from licence file)"
+                elif re.search(r"redistribution and use in source and binary forms", text, re.I):
+                    lic = "BSD (from licence file)"
+                if lic:
+                    break
+    seen.append(f"{name} {ver}: {' '.join(lic.split())[:70] or 'NO LICENCE METADATA'}")
     n = norm(name)
     if n not in re.sub(r"[-_.]+", "-", notices):
         problems.append(f"{name} is inside the app but missing from the shipped licence notices")
