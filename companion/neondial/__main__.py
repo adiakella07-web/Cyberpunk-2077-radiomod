@@ -259,8 +259,11 @@ def selftest(path):
         win = webview.create_window("t", html="<script>window.MusicKit={getInstance:function(){return {isPlaying:false}}}</script>", hidden=True)
         webview.start(work, private_mode=False, storage_path=tempfile.mkdtemp())
         log_(f"built-in browser (WebView2) check: {'OK ' + str(res.get('r')) if 'r' in res else 'FAILED ' + str(res.get('err'))}")
+        if "r" not in res:
+            ok = False                                   # Standalone Apple Music depends on this: fail the build
     except Exception as e:
         log_(f"built-in browser (WebView2) check: FAILED {e!r}")
+        ok = False
     pathlib.Path(path).write_text("\n".join(lines) + ("\nSELFTEST OK" if ok else "\nSELFTEST FAILED"), encoding="utf-8")
     os._exit(0 if ok else 1)
 

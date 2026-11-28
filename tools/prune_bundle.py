@@ -10,9 +10,9 @@ root = pathlib.Path(sys.argv[1]) / "_internal"
 PATTERNS = [
     "**/*.pdb",
     "webview/platforms/android*", "webview/platforms/cocoa*", "webview/platforms/gtk*", "webview/platforms/qt*",
-    "webview/platforms/cef*", "webview/**/*android*", "webview/**/pywebview-android.jar",
-    "webview/**/win-arm64", "webview/**/win-x86", "webview/**/*arm64*", "webview/**/*.x86.dll",
-    "clr_loader/ffi/dlls/x86*", "clr_loader/ffi/dlls/arm64*",
+    "webview/platforms/cef*", "webview/**/pywebview-android.jar",
+    # NOT pruned on purpose: webview/lib (incl. win-arm64 / win-x86 runtime folders: pywebview looks for them even on x64)
+    # and clr_loader/ffi/dlls (its loader enumerates the architecture folders).
     "setuptools", "setuptools-*", "pkg_resources", "_distutils_hack", "numpy", "numpy-*", "numpy.libs",
 ]
 removed = 0
